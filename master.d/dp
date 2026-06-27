@@ -1,0 +1,4 @@
+*FLAG	PREFIX	SOFT	#DEV	DEPENDENCIES
+nsc	dp_	-	-	scsi
++thread_class	scsi
+
