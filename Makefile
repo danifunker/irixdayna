@@ -37,10 +37,10 @@ LDFLAGS_IP30=-nostdlib -64 -mips4
 LDFLAGS_IP32=-nostdlib -n32 -mips3
 LDFLAGS_IP22=-nostdlib -n32 -mips3
 
-MYCFLAGS_IP35=-mips4 -DPTE_64BIT
-MYCFLAGS_IP30=-mips4 -DPTE_64BIT -DHEART_INVALIDATE_WAR
-MYCFLAGS_IP32=-mips3
-MYCFLAGS_IP22=-mips3
+MYCFLAGS_IP35=-mips4 -DPTE_64BIT -I.
+MYCFLAGS_IP30=-mips4 -DPTE_64BIT -DHEART_INVALIDATE_WAR -I.
+MYCFLAGS_IP32=-mips3 -I.
+MYCFLAGS_IP22=-mips3 -I.
 
 #if $(CPUBOARD) == "IP30"
 MYCFLAGS=$(MYCFLAGS_IP30) $(BUILTIN_CFLAGS)
@@ -55,7 +55,7 @@ LDFLAGS=$(LDFLAGS_IP35) -v
 MYCFLAGS=$(MYCFLAGS_IP22) $(BUILTIN_CFLAGS)
 LDFLAGS=$(LDFLAGS_IP22) -v
 #else
-MYCFLAGS=$(BUILTIN_CFLAGS)
+MYCFLAGS=$(BUILTIN_CFLAGS) -I.
 LDFLAGS=-nostdlib -v
 #endif
 
@@ -75,13 +75,9 @@ $(MODULE): $(OBJS)
 
 if_dp.o: if_dp.c
 
-# Major device number 44 — choose a free slot on your system.
-# Check /var/sysgen/master.d/* for conflicts.
-DP_MAJOR=44
-
 load: $(MODULE)
 	@echo "Loading DaynaPort driver..."
-	$(ML) ld -v -c $(MODULE) -p dp_ -s $(DP_MAJOR)
+	$(ML) ld -v -c $(MODULE) -p dp_
 
 unload:
 	$(ML) unld -v -p dp_
@@ -91,7 +87,6 @@ reload: unload load
 list:
 	$(ML) list
 
-# Permanent installation: copies files and prints autoconfig instructions.
 install: $(MODULE)
 	cp master.d/dp /var/sysgen/master.d/dp
 	cp $(MODULE)   /var/sysgen/boot/dp.o
@@ -112,15 +107,22 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  all      Build dp.o (default)"
-	@echo "  load     Load into running kernel (major=$(DP_MAJOR))"
+	@echo "  load     Load into running kernel"
 	@echo "  unload   Unload from kernel"
 	@echo "  reload   Unload + load"
 	@echo "  list     Show loaded modules"
 	@echo "  install  Install for permanent boot (needs reboot + autoconfig)"
 	@echo "  clean    Remove build artifacts"
 	@echo ""
+	@echo "Typical workflow after first build:"
+	@echo "  smake load"
+	@echo ""
 	@echo "Variables:"
 	@echo "  CPUBOARD   Target board: IP22 IP30 IP32 IP35  (default: $(CPUBOARD))"
-	@echo "  DP_MAJOR   Major device number              (default: $(DP_MAJOR))"
+	@echo ""
+	@echo "Debug:"
+	@echo "  -DDP_LOG       init/attach/enable/reset events"
+	@echo "  -DDP_LOG_SCSI  SCSI command traces (op/status/resid)"
+	@echo "  -DDP_LOG_NET   RX/TX packet traces"
 
 .PHONY: all load unload reload list install clean reboot help
