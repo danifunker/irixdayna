@@ -4,7 +4,7 @@
 
 A native IRIX 6.5 kernel driver for the DaynaPort SCSI/Link Ethernet adapter
 (DP0801/DP0802) and compatible emulators including ZuluSCSI, BlueSCSI V2,
-PiSCSI, and SCSI2SD.
+PiSCSI.
 
 The DaynaPort SCSI/Link is a SCSI-attached Ethernet adapter that was originally
 sold for vintage Macs. It presents as a SCSI type-3 (Processor) device and
