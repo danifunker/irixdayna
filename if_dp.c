@@ -1,3 +1,5 @@
+//#define DP_LOG
+//#define DP_LOG_NET
 /*
  * if_dp.c - DaynaPort SCSI/Link Ethernet driver for IRIX 6.5
  *
@@ -130,9 +132,9 @@ struct dp_softc {
     mutex_t             dp_qlock;           /* serialises dp_runqueue      */
     mutex_t             dp_taillock;        /* protects tx queue tail      */
     toid_t              dp_timer;           /* RX poll timer id           */
-    int                 dp_enabled;         /* 1 after eio_init           */
+    volatile int        dp_enabled;         /* 1 after eio_init           */
     int                 dp_unit;
-    scsi_request_t     *dp_req;             /* kern_calloc                */
+    scsi_request_t      dp_req;             /* embedded — no separate alloc */
     u_char              dp_cdb[DP_CDB_LEN]; /* CDB — must outlive SLI_COMMAND */
     u_char             *dp_sense;           /* VM_CACHEALIGN|VM_DIRECT    */
     u_char             *dp_rxbuf;           /* VM_CACHEALIGN|VM_DIRECT    */
@@ -143,7 +145,8 @@ struct dp_softc {
     int                 dp_txq_len;         /* current depth (both locks) */
 };
 
-static int dp_nunit = 0;
+static int              dp_nunit = 0;
+static struct dp_softc *dp_units[DP_MAXUNITS];
 
 /* -----------------------------------------------------------------------
  * Forward declarations
@@ -156,6 +159,7 @@ static int  dp_eio_transmit(struct etherif *, struct etheraddr *,
                             struct etheraddr *, u_short, struct mbuf *);
 static int  dp_eio_ioctl(struct etherif *, int, void *);
 int         dp_attach(vertex_hdl_t);
+int         dp_detach(vertex_hdl_t);
 static int  dp_do_attach(vertex_hdl_t, scsi_lun_info_t *, scsi_unit_info_t *);
 
 static struct etherifops dp_ops = {
@@ -185,12 +189,13 @@ static int
 dp_scsi_cmd(struct dp_softc *sc, u_char *cdb, int cdblen,
             void *buf, int buflen, ushort dir)
 {
-    scsi_request_t *req = sc->dp_req;
+    scsi_request_t *req = &sc->dp_req;
     int status;
 
     bzero(req, sizeof *req);
     bcopy(cdb, sc->dp_cdb, cdblen);
     req->sr_lun_vhdl = sc->dp_lun_vhdl;
+    req->sr_ctlr     = SLI_ADAP(sc->dp_lun_info);
     req->sr_target   = SLI_TARG(sc->dp_lun_info);
     req->sr_lun      = SLI_LUN(sc->dp_lun_info);
     req->sr_command  = sc->dp_cdb;
@@ -200,7 +205,7 @@ dp_scsi_cmd(struct dp_softc *sc, u_char *cdb, int cdblen,
     req->sr_senselen = DP_SENSE_LEN;
     req->sr_notify   = dp_scsi_done;
     req->sr_dev      = (void *)sc;
-    req->sr_flags    = SRF_AEN_ACK;
+    req->sr_flags    = SRF_AEN_ACK | SRF_FLUSH;
 
     if (buflen > 0) {
         req->sr_buffer = (u_char *)buf;
@@ -490,13 +495,13 @@ dp_runqueue(struct dp_softc *sc)
     int more_rx;
     int more_tx;
 
-    if (!sc->dp_enabled)
-        return;
-
     if (sc->dp_timer) {
         untimeout(sc->dp_timer);
         sc->dp_timer = 0;
     }
+
+    if (!sc->dp_enabled)
+        return;
 
     do {
         more_tx = dp_do_tx(sc);
@@ -521,6 +526,22 @@ dp_timer_kick(struct dp_softc *sc)
     mutex_lock(&sc->dp_qlock, PZERO);
     dp_runqueue(sc);
     mutex_unlock(&sc->dp_qlock);
+}
+
+static void
+dp_runqueue_stop(struct dp_softc *sc)
+{
+    sc->dp_enabled = 0;
+    mutex_lock(&sc->dp_qlock, PZERO);
+    sc->dp_timer = 0;   /* by now timer has either fired or been cancelled by runqueue */
+    mutex_unlock(&sc->dp_qlock);
+}
+
+static void
+dp_runqueue_start(struct dp_softc *sc)
+{
+    sc->dp_enabled = 1;
+    dp_timer_kick(sc);
 }
 
 /* -----------------------------------------------------------------------
@@ -557,9 +578,7 @@ dp_eio_init(struct etherif *eif, int flags)
     ifp->if_flags |= IFF_RUNNING;
     ifp->if_timer  = IFNET_SLOWHZ;     /* arm watchdog */
 
-    sc->dp_enabled = 1;
-    sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
-                            HZ / 100, plbase);
+    dp_runqueue_start(sc);
 
     DPLOG((CE_NOTE, "dp%d: eio_init done, rx poll started\n", sc->dp_unit));
     return 0;
@@ -576,9 +595,11 @@ dp_eio_reset(struct etherif *eif)
 
     DPLOG((CE_NOTE, "dp%d: eio_reset\n", sc->dp_unit));
 
+    dp_runqueue_stop(sc);
     dp_enable(sc, 0);
     dp_enable(sc, 1);
     dp_set_mode(sc);
+    dp_runqueue_start(sc);
 }
 
 /* -----------------------------------------------------------------------
@@ -865,6 +886,36 @@ dp_init(void)
 #endif
 }
 
+/* -----------------------------------------------------------------------
+ * dp_do_detach - tear down one unit and null its slot in dp_units[]
+ * ----------------------------------------------------------------------- */
+static void
+dp_do_detach(int unit)
+{
+    struct dp_softc *sc = dp_units[unit];
+    if (!sc)
+        return;
+
+    dp_units[unit] = NULL;      /* null first so unload won't double-detach */
+
+    DPLOG((CE_NOTE, "dp%d: detach\n", sc->dp_unit));
+
+    dp_runqueue_stop(sc);
+    dp_enable(sc, 0);
+
+    kmem_free(sc->dp_sense,  DP_SENSE_LEN);
+    kmem_free(sc->dp_rxbuf,  DP_RX_BUFSZ);
+    kmem_free(sc->dp_txpool, DP_TX_QLEN * DP_TX_BUFSZ);
+
+    mutex_destroy(&sc->dp_qlock);
+    mutex_destroy(&sc->dp_taillock);
+    freesema(&sc->dp_sema);
+
+    SLI_FREE(sc->dp_lun_info)(sc->dp_lun_vhdl, NULL);
+
+    kmem_free(sc, sizeof(*sc));
+}
+
 #ifdef DP_MODULE
 /* -----------------------------------------------------------------------
  * dp_unload - called by ml framework at module unload time.
@@ -872,7 +923,11 @@ dp_init(void)
 void
 dp_unload(void)
 {
+    int i;
     DPLOG((CE_NOTE, "dp: dp_unload\n"));
+    for (i = 0; i < dp_nunit; i++)
+        dp_do_detach(i);
+    dp_nunit = 0;
 }
 #endif /* DP_MODULE */
 
@@ -920,14 +975,12 @@ dp_do_attach(vertex_hdl_t lun_vhdl, scsi_lun_info_t *lun_info,
         return -1;
     }
 
-    sc->dp_req    = (scsi_request_t *)kern_calloc(1, sizeof(scsi_request_t));
     sc->dp_sense  = (u_char *)kmem_zalloc(DP_SENSE_LEN, VM_CACHEALIGN|VM_DIRECT);
     sc->dp_rxbuf  = (u_char *)kmem_zalloc(DP_RX_BUFSZ,  VM_CACHEALIGN|VM_DIRECT);
     sc->dp_txpool = (u_char *)kmem_zalloc(DP_TX_QLEN * DP_TX_BUFSZ,
                                           VM_CACHEALIGN|VM_DIRECT);
 
-    if (!sc->dp_req || !sc->dp_sense || !sc->dp_rxbuf || !sc->dp_txpool) {
-        if (sc->dp_req)    kern_free(sc->dp_req);
+    if (!sc->dp_sense || !sc->dp_rxbuf || !sc->dp_txpool) {
         if (sc->dp_sense)  kmem_free(sc->dp_sense, DP_SENSE_LEN);
         if (sc->dp_rxbuf)  kmem_free(sc->dp_rxbuf, DP_RX_BUFSZ);
         if (sc->dp_txpool) kmem_free(sc->dp_txpool, DP_TX_QLEN * DP_TX_BUFSZ);
@@ -964,6 +1017,7 @@ dp_do_attach(vertex_hdl_t lun_vhdl, scsi_lun_info_t *lun_info,
     if (unit_info)
         SUI_CTINFO(unit_info) = (void *)sc;
 
+    dp_units[unit] = sc;
     dp_nunit++;
 
     {
@@ -1028,4 +1082,22 @@ dp_attach(vertex_hdl_t conn_vhdl)
     }
 
     return dp_do_attach(SLI_LUN_VHDL(lun_info), lun_info, unit_info);
+}
+
+int
+dp_detach(vertex_hdl_t conn_vhdl)
+{
+    int i;
+
+    DPLOG((CE_NOTE, "dp: dp_detach called\n"));
+
+    for (i = 0; i < dp_nunit; i++) {
+        if (dp_units[i] && dp_units[i]->dp_lun_vhdl == conn_vhdl) {
+            dp_do_detach(i);
+            return 0;
+        }
+    }
+
+    DPLOG((CE_NOTE, "dp: dp_detach: vhdl not found\n"));
+    return -1;
 }

@@ -13,14 +13,15 @@
 #   smake CPUBOARD=IP30        # build for Octane
 #   smake CPUBOARD=IP32        # build for O2
 #   smake CPUBOARD=IP35        # build for Fuel/Origin 350
-#   smake CPUBOARD=IP22        # build for Indigo2/Challenge S
+#   smake CPUBOARD=IP28        # build for Indigo2/R10K
+#   smake CPUBOARD=IP22        # build for Indy/Indigo2/Challenge S
 #   smake load                 # load the driver into the running kernel
 #   smake unload               # unload
 #   smake reload               # unload + load
 #   smake install              # copy to /var/sysgen for autoconfig
 #
 
-CPUBOARD=IP30
+CPUBOARD=IP28
 BUILTIN=0
 
 #if $(BUILTIN) == "1"
@@ -33,13 +34,15 @@ BUILTIN_CFLAGS=-DDP_MODULE
 
 # Per-platform ABI flags
 LDFLAGS_IP35=-nostdlib -64 -mips4
-LDFLAGS_IP30=-nostdlib -64 -mips4
 LDFLAGS_IP32=-nostdlib -n32 -mips3
+LDFLAGS_IP30=-nostdlib -64 -mips4
+LDFLAGS_IP28=-nostdlib -64 -mips4
 LDFLAGS_IP22=-nostdlib -n32 -mips3
 
 MYCFLAGS_IP35=-mips4 -DPTE_64BIT -I.
-MYCFLAGS_IP30=-mips4 -DPTE_64BIT -DHEART_INVALIDATE_WAR -I.
 MYCFLAGS_IP32=-mips3 -I.
+MYCFLAGS_IP30=-mips4 -DPTE_64BIT -DHEART_INVALIDATE_WAR -I.
+MYCFLAGS_IP28=-mips4 -DPTE_64BIT -I.
 MYCFLAGS_IP22=-mips3 -I.
 
 #if $(CPUBOARD) == "IP30"
@@ -51,6 +54,9 @@ LDFLAGS=$(LDFLAGS_IP32) -v
 #elif $(CPUBOARD) == "IP35"
 MYCFLAGS=$(MYCFLAGS_IP35) $(BUILTIN_CFLAGS)
 LDFLAGS=$(LDFLAGS_IP35) -v
+#elif $(CPUBOARD) == "IP28"
+MYCFLAGS=$(MYCFLAGS_IP28) $(BUILTIN_CFLAGS)
+LDFLAGS=$(LDFLAGS_IP28) -v
 #elif $(CPUBOARD) == "IP22"
 MYCFLAGS=$(MYCFLAGS_IP22) $(BUILTIN_CFLAGS)
 LDFLAGS=$(LDFLAGS_IP22) -v
