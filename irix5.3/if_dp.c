@@ -311,6 +311,12 @@ struct dp_softc {
     volatile int        dp_fg;          /* a foreground command is in flight  */
     int                 dp_chain;       /* consecutive completion re-submits  */
     int                 dp_stall;       /* ticks a command has been in flight */
+#ifdef DP_LOG_TICKRATE
+    uint                dp_ntick;       /* poll callbacks since last watchdog */
+    uint                dp_nsub;        /* commands submitted, ditto          */
+    uint                dp_ndone;       /* completions seen, ditto            */
+    uint                dp_nrx;         /* if_ipackets at the last watchdog   */
+#endif
 #endif
 };
 
@@ -488,6 +494,9 @@ dp_async_submit(struct dp_softc *sc)
     req->sr_flags   |= SRF_AEN_ACK | SRF_FLUSH;
 
     sc->dp_abusy = 1;
+#ifdef DP_LOG_TICKRATE
+    sc->dp_nsub++;
+#endif
     (*scsi_command[sc->dp_drvnum])(req);
 }
 
@@ -501,6 +510,9 @@ dp_async_done(scsi_request_t *req)
     struct ifnet *ifp = eiftoifp(&sc->dp_eif);
     int more = 0;
 
+#ifdef DP_LOG_TICKRATE
+    sc->dp_ndone++;
+#endif
     if (sc->dp_atx != NULL) {
         int pktlen = sc->dp_atx->len;
         if (req->sr_status != 0) {
@@ -963,6 +975,9 @@ dp_timer_kick(struct dp_softc *sc)
      * the next tick and submits one command, then returns. Everything below
      * is the portable synchronous path, which 6.5 still uses. */
     sc->dp_timer = 0;
+#ifdef DP_LOG_TICKRATE
+    sc->dp_ntick++;
+#endif
     dp_async_poll(sc);
     return;
 #endif
@@ -1159,6 +1174,31 @@ dp_eio_watchdog(struct ifnet *ifp)
 
     if (sc->dp_enabled) {
         ifp->if_timer = IFNET_SLOWHZ;
+#if defined(DP_ASYNC_RX) && defined(DP_LOG_TICKRATE)
+        /* This watchdog is the one clock in the driver whose rate we can
+         * trust: the ifnet layer runs it at IFNET_SLOWHZ regardless of what
+         * our own timer is doing. So measure the poll against it.
+         *
+         *   tick=~100  the poll is running at the HZ/100 it asked for, and a
+         *              latency problem is somewhere other than the timer;
+         *   tick=~1    itimeout() is not delivering the requested delay;
+         *   tick=0     the chain has lapsed altogether and the only thing
+         *              still collecting packets is this watchdog.
+         *
+         * sub/done bracket the SCSI round trip: ticks without submissions
+         * mean the engine is being skipped (busy/fg), submissions without
+         * completions mean the device is not answering. Note that dp_stall
+         * is counted in poll ticks, so if tick is ~1 the stall guard needs
+         * DP_STALL_TICKS seconds rather than DP_STALL_TICKS/100 to fire -
+         * its silence is not evidence that no completion was lost. */
+        cmn_err(CE_NOTE, "dp%d: 1s tick=%u sub=%u done=%u rx=%u"
+                " busy=%d fg=%d stall=%d\n", sc->dp_unit,
+                sc->dp_ntick, sc->dp_nsub, sc->dp_ndone,
+                (uint)ifp->if_ipackets - sc->dp_nrx,
+                sc->dp_abusy, sc->dp_fg, sc->dp_stall);
+        sc->dp_ntick = sc->dp_nsub = sc->dp_ndone = 0;
+        sc->dp_nrx   = (uint)ifp->if_ipackets;
+#endif
 #ifdef DP_ASYNC_RX
         /* Last resort: this runs once a second whatever else happens, so if
          * the poll chain has lapsed entirely it gets going again here rather
