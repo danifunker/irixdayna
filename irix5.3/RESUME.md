@@ -18,6 +18,9 @@ Verified, by actually running it:
   an emulated Indy (`scripts/iris-build.sh --release 5.3`).
 - `autoconfig -f` links a real kernel with the driver in it — every symbol
   resolves (`--autoconfig`).
+- That kernel **boots**, and `dp_init()` runs its SCSI bus scan against the
+  emulated WD33C93 without panicking, printing
+  `NOTICE: dp: DaynaPort SCSI/Link driver (IRIX 5.3)` (`--boot-test`).
 - lboot accepts `master.d/dp`: the generated `/var/sysgen/master.c` carries
   `dp_init` in the boot init table and `dp_open`/`dp_close`/`dp_ioctl` in the
   cdevsw entry. That settles the master-file flags question.
