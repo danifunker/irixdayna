@@ -289,10 +289,6 @@ struct dp_softc {
     int                 dp_txq_head;        /* dequeue index (qlock)      */
     int                 dp_txq_tail;        /* enqueue index (taillock)   */
     int                 dp_txq_len;         /* current depth (both locks) */
-    /* Non-zero while a foreground (user-context) SCSI command holds dp_qlock.
-     * dp_timer_kick() checks it and skips the tick rather than blocking on
-     * the mutex from timeout context - see the comment there. */
-    volatile int        dp_fg;
 };
 
 static int              dp_nunit = 0;
@@ -396,11 +392,9 @@ dp_scsi_cmd_locked(struct dp_softc *sc, u_char *cdb, int cdblen,
                    void *buf, int buflen, ushort dir)
 {
     int status;
-    sc->dp_fg++;                /* tell the poll tick to stand off */
     mutex_lock(&sc->dp_qlock, PZERO);
     status = dp_scsi_cmd(sc, cdb, cdblen, buf, buflen, dir);
     mutex_unlock(&sc->dp_qlock);
-    sc->dp_fg--;
     return status;
 }
 
@@ -671,8 +665,10 @@ dp_runqueue(struct dp_softc *sc)
         } while (more_rx);
     } while (more_tx);
 
+#ifndef DP_NO_POLL_TIMER
     sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
                             HZ / 100, plbase);
+#endif
 }
 
 /* -----------------------------------------------------------------------
@@ -682,6 +678,14 @@ dp_runqueue(struct dp_softc *sc)
 static void
 dp_timer_kick(struct dp_softc *sc)
 {
+#ifdef DP_NO_POLL_TIMER
+    /* Diagnostic build: no periodic poll at all. RX then only happens when
+     * dp_eio_transmit() kicks the queue, which runs in a context where
+     * sleeping is legal - unlike this callback. Slow (RX lags one transmit)
+     * but it isolates "the packet path is broken" from "the packet path is
+     * fine, we just cannot poll it from timeout context". */
+    return;
+#endif
     /*
      * This handle has just fired, so it is dead. Clear it before anything
      * else: dp_runqueue() below calls untimeout(sc->dp_timer) on entry, and
@@ -706,15 +710,15 @@ dp_timer_kick(struct dp_softc *sc)
      *
      * Any ifconfig/ioctl that reaches the device - set_mode from SIOCADDMULTI,
      * for instance - is enough to trigger it once the poll is armed. So skip
-     * this tick entirely when a foreground command is in flight and come back
-     * in 10ms; there is nothing time-critical about a poll.
+     * this tick entirely when the lock is held and come back in 10ms; there is
+     * nothing time-critical about a poll. dp_eio_transmit() already uses
+     * mutex_trylock() for the same reason.
      */
-    if (sc->dp_fg) {
+    if (!mutex_trylock(&sc->dp_qlock)) {
         sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
                                 HZ / 100, plbase);
         return;
     }
-    mutex_lock(&sc->dp_qlock, PZERO);
     dp_runqueue(sc);
     mutex_unlock(&sc->dp_qlock);
 }
