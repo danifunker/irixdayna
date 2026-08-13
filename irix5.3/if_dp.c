@@ -341,6 +341,7 @@ static void dp_runqueue(struct dp_softc *);
 static void dp_timer_kick(struct dp_softc *);
 #ifdef DP_ASYNC_RX
 extern int  dp_rx_parse(struct dp_softc *);     /* in the shared region */
+static void dp_async_arm(struct dp_softc *);
 static void dp_async_tick(struct dp_softc *);
 static void dp_async_poll(struct dp_softc *);
 static void dp_async_submit(struct dp_softc *);
@@ -542,19 +543,31 @@ dp_async_done(scsi_request_t *req)
      * that pair of braces, and costs nothing when the timer is already
      * pending - dp_async_rearm_if_idle() checks. Relying on either one alone
      * has now failed on hardware once in each direction. */
+    dp_async_arm(sc);
+}
+
+/* Arm the poll if it is not already armed. Idempotent and cheap, so every
+ * entry point calls it: the chain lapsing is not hypothetical, and when it
+ * does the only thing that revives it is the next transmit. On a machine
+ * pinging once a second that shows up as an occasional ~1s round trip - the
+ * reply sat in the device until the next TX went out and collected it. */
+static void
+dp_async_arm(struct dp_softc *sc)
+{
     if (sc->dp_enabled && sc->dp_timer == 0)
         sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
                                 HZ / 100, plbase);
 }
 
 /* Submit if the engine is idle and no foreground command holds the device.
- * Never arms anything: callers that need the poll to continue go through
- * dp_async_poll() below. Safe from any context. */
+ * Also (re)arms the poll, so a transmit or an ioctl revives a lapsed chain
+ * instead of merely borrowing it for one collection. Safe from any context. */
 static void
 dp_async_tick(struct dp_softc *sc)
 {
     if (!sc->dp_enabled)
         return;
+    dp_async_arm(sc);
     if (sc->dp_abusy || sc->dp_fg)
         return;
     sc->dp_chain = 0;
@@ -578,9 +591,7 @@ dp_async_poll(struct dp_softc *sc)
 {
     if (!sc->dp_enabled)
         return;
-    if (sc->dp_timer == 0)
-        sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
-                                HZ / 100, plbase);
+    dp_async_arm(sc);
 
     /*
      * Recover from a command whose completion never arrives. One request is
@@ -1146,8 +1157,16 @@ dp_eio_watchdog(struct ifnet *ifp)
     if (sc == NULL)
         return;
 
-    if (sc->dp_enabled)
+    if (sc->dp_enabled) {
         ifp->if_timer = IFNET_SLOWHZ;
+#ifdef DP_ASYNC_RX
+        /* Last resort: this runs once a second whatever else happens, so if
+         * the poll chain has lapsed entirely it gets going again here rather
+         * than waiting for the guest to transmit. Submitting is async and
+         * never sleeps, so it is legal from this context. */
+        dp_async_tick(sc);
+#endif
+    }
 }
 
 /* -----------------------------------------------------------------------

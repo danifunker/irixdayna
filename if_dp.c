@@ -756,8 +756,16 @@ dp_eio_watchdog(struct ifnet *ifp)
     if (sc == NULL)
         return;
 
-    if (sc->dp_enabled)
+    if (sc->dp_enabled) {
         ifp->if_timer = IFNET_SLOWHZ;
+#ifdef DP_ASYNC_RX
+        /* Last resort: this runs once a second whatever else happens, so if
+         * the poll chain has lapsed entirely it gets going again here rather
+         * than waiting for the guest to transmit. Submitting is async and
+         * never sleeps, so it is legal from this context. */
+        dp_async_tick(sc);
+#endif
+    }
 }
 
 /* -----------------------------------------------------------------------
