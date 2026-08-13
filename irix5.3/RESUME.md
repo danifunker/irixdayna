@@ -356,6 +356,8 @@ Every kernel symbol the driver references was confirmed present in the 5.3
 | lboot drops the driver, no error | master file flags, or missing `s` (software) flag — lboot cannot probe SCSI and concludes absent | `grep dp_ /var/sysgen/master.c` |
 | Kernel builds, panics during boot | `dp_init()` running before the SCSI subsystem is ready, or `scsi_driver_table[]` indexed out of range | `boot /unix.works`; narrow the `SCSI_SGISTART` range |
 | Boots fine, no `dp0`, no messages | `USE:` used instead of `INCLUDE:` — `dp_init()` never called | Fix `irix.sm`, re-`autoconfig` |
+| `autoconfig` succeeded but the booted kernel has no driver | You booted `/unix`, the OLD kernel. `autoconfig` only **stages** the new one as `/unix.install`; the rename happens during a clean shutdown | Reboot cleanly (`shutdown`/`init 6`), or boot `/unix.install` explicitly from the PROM. This bit the emulator boot test — see `scripts/iris-build.sh` |
+| `multiply defined _irix5_mips4` from `ng1.a` during autoconfig | Pre-existing on stock 5.3 images, unrelated to this driver | Ignore; `autoconfig` still succeeds |
 | Boots, `dp_init` runs, no device found | INQUIRY match failing, or adapter range wrong, or `drvnum == 0` sentinel wrong | `-DDP_LOG` prints every type-3 device's vendor/product; compare against `"Dayna"` / `"SCSI/Link"` |
 | `dp0` exists, `ifconfig up` hangs forever | `psema(&sc->dp_sema)` never woken — `sr_notify` not called | `-DDP_LOG_SCSI`; check `scsi_command[]` index and that `sr_notify` is non-NULL (5.3 rejects NULL) |
 | `ifconfig up` OK, zero traffic | RX poll not running — `itimeout`/`plbase` wrong, or `dp_enabled` never set | `-DDP_LOG_NET`; confirm `dp_runqueue` re-arms |
