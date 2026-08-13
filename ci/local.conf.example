@@ -1,0 +1,21 @@
+# ci/local.conf.example — per-machine paths for scripts/iris-build.sh.
+#
+#   cp ci/local.conf.example ci/local.conf && $EDITOR ci/local.conf
+#
+# The real ci/local.conf is .gitignore'd. Parsed as KEY=VALUE, never sourced.
+# Precedence: command-line flag > environment variable > this file.
+#
+# If this file is absent, scripts/iris-build.sh falls back to
+# ../irixscsitb/ci/local.conf — the same two disk images serve both projects,
+# so there is no need to duplicate them.
+
+# Installed IRIX system disks WITH the dev tools (cc, make, /var/sysgen).
+# Root's password must be empty (or export IRIX_ROOT_PASSWORD).
+IRIX53_IMAGE=/path/to/irix53-dev.chd
+IRIX65_IMAGE=/path/to/irix65-dev.chd
+
+# Where the iris emulator lives (default ../iris); needs target/release/{iris,iris-ci}
+#IRIS_DIR=../iris
+
+# rb-cli binary (default: PATH)
+#RB_CLI=/usr/local/bin/rb-cli

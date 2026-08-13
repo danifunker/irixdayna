@@ -39,9 +39,19 @@
  *
  * Build with -DDP_LOG to enable verbose kernel logging.
  *
- * NOTE: every "XXX53" comment marks something that must be confirmed
- * against a real IRIX 5.3 /usr/include before first boot.  They are
- * listed in README.md.
+ * VERIFICATION STATUS.  The 5.3 interfaces used here were checked
+ * against headers and the /unix symbol table extracted from an IRIX 5.3
+ * IP22 (Indy) disk image.  Confirmed present and correctly shaped:
+ * ether_attach, ether_input, add_to_inventory, m_vget, m_freem, psema,
+ * vsema, cpsema, initnsema, initnsema_mutex, freesema, itimeout,
+ * untimeout, plbase, kmem_zalloc, kmem_free, sprintf, cmn_err, delay,
+ * scsi_driver_table, scsi_info, scsi_alloc, scsi_free, scsi_command.
+ *
+ * ONE UNKNOWN REMAINS: the layout of struct etherif (see sgi_ether.h).
+ * ether_attach exists, but ether.h is not shipped and the kernel carries
+ * no struct debug info, so the member list cannot be recovered without
+ * running code.  Build the first kernel on any machine with
+ * -DDP_CHECK_ETHERIF; see README.md.
  */
 
 #include "sys/types.h"
@@ -55,6 +65,7 @@
 #include "sys/kmem.h"
 #include "sys/sema.h"
 #include "sys/cred.h"
+#include "sys/conf.h"   /* D_MP - 6.5 picks this up via another path */
 #include "sys/ddi.h"
 #include "sys/scsi.h"
 #include "net/if.h"
@@ -72,14 +83,21 @@
  * calls 6.5 names.  Map them onto the 5.3 equivalents here rather than
  * scattering #ifdefs through the protocol code.
  *
- * The mutexes are implemented as binary counting semaphores (initial
- * value 1), which is the documented 5.3 mechanism for a sleeping mutex.
- * The softc declares them as sema_t directly, so no mutex_t typedef is
- * needed - 5.3 may well define its own and we must not collide with it.
+ * The mutexes become 5.3 mutex-semaphores.  The softc declares them as
+ * sema_t directly: 5.3 spells the Sun-compat alias kmutex_t, not
+ * mutex_t, so there is nothing to typedef and nothing to collide with.
  *
- * The #undefs matter: if 5.3's sys/sema.h already provides any of these
- * names (as a macro or a prototype), redefining without undef is at
- * best a warning and at worst an error.  Ours must win either way.
+ * The #undefs are NOT defensive padding - sys/sema.h really does define
+ * mutex_init, with a DIFFERENT four-argument shape:
+ *     #define mutex_init(m, nm, f, i)  initnsema_mutex(m, nm)
+ * (name second, not third).  Without the #undef the 6.5-style three-arg
+ * call below expands wrongly.  mutex_lock/mutex_unlock/mutex_trylock are
+ * not defined by 5.3 at all - it uses mutex_enter/mutex_exit - so those
+ * #undefs are merely belt-and-braces.
+ *
+ * Verified against sys/sema.h and sys/ddi.h from an IRIX 5.3 IP22 disk
+ * image, and every symbol below was confirmed present in that image's
+ * /unix symbol table.
  * ----------------------------------------------------------------------- */
 
 #ifndef MUTEX_DEFAULT
@@ -91,20 +109,22 @@
 #undef  mutex_lock
 #undef  mutex_unlock
 
-#define mutex_init(m, type, name)   initnsema((m), 1, (name))
+/* initnsema_mutex() is 5.3's dedicated mutex-semaphore initialiser. */
+#define mutex_init(m, type, name)   initnsema_mutex((m), (name))
 #define mutex_destroy(m)            freesema(m)
 #define mutex_lock(m, pri)          ((void)psema((m), (pri)))
 #define mutex_unlock(m)             ((void)vsema(m))
 
 /*
- * XXX53: cpsema() must return non-zero ONLY when the lock was actually
- * acquired.  The 5.3 manual describes the failure case as "semaphore
- * count is already less than 0"; for a mutex initialised to 1 the
- * would-block case is count <= 0.  Verify against sys/sema.h before
- * trusting this - if cpsema() has the other sense, dp_eio_transmit()
- * can re-enter dp_runqueue() concurrently and corrupt the TX ring.
- * If in doubt, define DP_NO_TRYLOCK to disable the (purely optional)
- * transmit-side queue kick; the 10ms poll timer still drains the ring.
+ * cpsema() returns non-zero when the lock was acquired - confirmed by
+ * sys/sema.h, which on a uniprocessor build aliases
+ *     #define apcpsema(x)  1
+ * i.e. "conditional acquire always succeeds", which only type-checks as
+ * a success indicator if non-zero means acquired.
+ *
+ * DP_NO_TRYLOCK remains available: it disables the transmit-side queue
+ * kick, which is a latency optimisation only - the 10ms poll timer still
+ * drains the ring.  Keep it in reach if the TX ring is ever suspected.
  */
 #undef  mutex_trylock
 #ifdef DP_NO_TRYLOCK
@@ -118,18 +138,28 @@
 #define init_sema(s, v, name, unit) initnsema((s), (v), (name))
 
 /*
- * XXX53: confirm plbase exists on 5.3 (6.5 declares it in sys/ddi.h).
- * If not, "#define plbase 0" is the correct substitute for itimeout().
+ * plbase (sys/ddi.h: "extern pl_t plbase") and
+ * itimeout(void (*)(), void *, long, pl_t, ...) both exist on 5.3, so
+ * dp_runqueue()'s timer call needs no adjustment.
+ *
+ * kmem_zalloc() flags are native too: KM_SLEEP is 0 in sys/kmem.h, and
+ * sys/immu.h defines VM_DIRECT 0x0100 and VM_CACHEALIGN 0x0800.
+ * VM_DIRECT|VM_CACHEALIGN keeps the buffers in k0/k1seg and cache
+ * aligned so the host adapter can DMA straight into them.
  */
 
 /*
- * XXX53: confirm kmem_zalloc() accepts these flags on 5.3.  KM_SLEEP in
- * particular is a 6.x spelling; 5.3 may want 0 (sleep is the default)
- * with VM_NOSLEEP as the opposite.  VM_DIRECT|VM_CACHEALIGN is needed so
- * the SCSI host adapter can DMA straight into the buffer.
+ * SN_MORETOCOME does not exist on IRIX 5.3.  net/raw.h there defines only
+ * SN_PROMISC / SN_ERROR / SN_TRAILER and the SNERR_* codes; the
+ * "more packets follow, don't wake the protocol side yet" hint was added
+ * later.  The value reaches ether_input() as snoopflags and is OR'd into
+ * the snoopheader, so 0 is the correct 5.3 equivalent: we simply lose a
+ * batching optimisation on multi-packet READ responses.  Purely advisory
+ * - no correctness impact - and it keeps dp_do_rx() byte-identical to the
+ * 6.5 driver.
  */
-#ifndef KM_SLEEP
-#define KM_SLEEP        0
+#ifndef SN_MORETOCOME
+#define SN_MORETOCOME   0
 #endif
 
 /* -----------------------------------------------------------------------
@@ -1026,14 +1056,11 @@ dp_probe_one(int adap, int target, int lun)
     /*
      * scsi_driver_table is indexed by adapter number and yields the host
      * adapter driver number used to index scsi_info[]/scsi_alloc[]/
-     * scsi_command[]/scsi_free[].  The table is sparsely populated.
-     *
-     * XXX53: confirm the sentinel for "no adapter here".  Zero is
-     * assumed; if some SCSIDRIVER_* constant is legitimately 0 on this
-     * platform this test needs to change.
+     * scsi_command[]/scsi_free[].  The table is sparsely populated;
+     * SCSIDRIVER_NULL (0) marks a slot with no adapter behind it.
      */
     drvnum = scsi_driver_table[adap];
-    if (drvnum == 0)
+    if (drvnum == SCSIDRIVER_NULL)
         return 0;
 
     /* scsi_info issues an INQUIRY; NULL means nothing is there. */

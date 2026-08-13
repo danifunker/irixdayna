@@ -3,11 +3,13 @@
 IRIX 5.3 build of the DaynaPort SCSI/Link Ethernet driver. The 6.5 driver
 lives in the parent directory and is unchanged by this port.
 
-> **Status: not yet run on hardware.** Every IRIX 5.3 interface used here was
-> taken from SGI's *IRIX 5.3 Device Driver Programming Guide*, but a handful of
-> calls could not be confirmed without a real 5.3 `/usr/include`. They are
-> marked `XXX53` in `if_dp.c` and listed under
-> [Before first boot](#before-first-boot). Work through that list first.
+> **Status: compiles clean on IRIX 5.3/IP22; not yet run on hardware.** The
+> driver is built and verified by `scripts/iris-build.sh`, which compiles it
+> natively inside an emulated Indy. Every API question from the first draft has
+> been settled against real 5.3 headers — see
+> [Before first boot](#before-first-boot) — except the `struct etherif` layout,
+> which cannot be resolved without running code. Nothing has moved a packet
+> yet: the emulator has no DaynaPort target.
 
 For picking this up cold — design rationale, failure-mode triage, recovery from
 an unbootable kernel — see [RESUME.md](RESUME.md).
@@ -16,10 +18,14 @@ an unbootable kernel — see [RESUME.md](RESUME.md).
 
 IRIX 5.3 runs on:
 
-- **IP22** — Indy, Indigo2, Challenge S (R4x00) — the expected target, `-mips2`
+- **IP22** — Indy, Indigo2, Challenge S (R4x00) — the expected target
 - **IP20** — Indigo R4000
-- **IP12** — Indigo R3000, Personal Iris — `-mips1`
+- **IP12** — Indigo R3000, Personal Iris
 - **IP19 / IP21** — Challenge / Onyx
+
+The board is selected by `CPUBOARD`, which picks the CFLAGS set out of
+`/var/sysgen/Makefile.kernio`. It is **mandatory** — see
+[§4](#4-cpuboard-is-mandatory).
 
 For Octane (IP30), O2 (IP32), Fuel (IP35) or anything else running 6.5, use the
 driver in the parent directory. IP26/IP28 need 6.2 or later, so they also use
@@ -28,9 +34,17 @@ the 6.5 build.
 ## Build and install
 
 ```sh
-smake                 # Indy / Indigo2 (default, -mips2)
-smake MIPSOPT=-mips1  # Indigo R3000 / Personal Iris
+smake                  # Indy / Indigo2 / Challenge S (CPUBOARD=IP22 default)
+smake CPUBOARD=IP20    # Indigo R4000
+smake CPUBOARD=IP12    # Indigo R3000
 smake install
+```
+
+Or build it on the host, inside the emulator, without touching a real machine:
+
+```sh
+scripts/iris-build.sh --release 5.3               # compile only
+scripts/iris-build.sh --release 5.3 --autoconfig  # + link a real kernel
 ```
 
 Then add to `/var/sysgen/system/irix.sm`:
@@ -72,11 +86,12 @@ was rejected.
 | Discovery | `scsi_driver_register(3)` + CDL callback, or hwgraph inventory walk | `dp_init()` scans the bus with `scsi_info[]()` |
 | `scsi_alloc` success | `== SCSIALLOCOK` | **`!= 0`** (returns adapter type; 0 means failure) |
 | Mutexes | `mutex_t`, `mutex_lock/trylock/unlock` | `sema_t` + `psema`/`cpsema`/`vsema` |
-| Semaphore init | `init_sema(s, v, name, unit)` | `initnsema(s, v, name)` |
+| Semaphore init | `init_sema(s, v, name, unit)` | `initnsema(s, v, name)` / `initnsema_mutex(m, name)` |
 | Inventory | `device_inventory_add(vhdl, ...)` | `add_to_inventory(class, type, ctlr, unit, state)` |
 | Loading | `ml` loadable or built-in | built-in only |
-| ABI | n32 / 64-bit, mips3 / mips4 | **o32 only**, `-coff`, mips1 / mips2 |
+| ABI | n32 / 64-bit, mips3 / mips4 | **o32 only**, `-coff -non_shared -Wc,-pic0 -Wx,-G8` from `Makefile.kernio` |
 | Detach / unload | `dp_detach`, `dp_unload` | none — driver is permanent |
+| RX batching hint | `SN_MORETOCOME` | does not exist; shimmed to 0 (advisory only) |
 
 The DaynaPort protocol itself is unchanged: same five vendor CDBs, same
 ZuluSCSI multi-packet READ handling, same 10 ms poll, same TX ring.
@@ -84,10 +99,16 @@ ZuluSCSI multi-packet READ handling, same 10 ms poll, same TX ring.
 ### The 6.5 API shim
 
 Rather than scatter `#ifdef`s through the protocol code, `if_dp.c` opens with a
-~25-line shim that maps the 6.5 spellings onto 5.3 primitives —
-`mutex_lock` → `psema`, `mutex_trylock` → `cpsema`, `init_sema` → `initnsema`,
-and so on. The signatures line up almost exactly, which is what lets the shared
-region stay byte-identical.
+short shim mapping the 6.5 spellings onto 5.3 primitives — `mutex_lock` →
+`psema`, `mutex_trylock` → `cpsema`, `mutex_init` → `initnsema_mutex`,
+`init_sema` → `initnsema`, `SN_MORETOCOME` → 0. The signatures line up almost
+exactly, which is what lets the shared region stay byte-identical.
+
+One shim entry is load-bearing rather than cosmetic: 5.3's `sys/sema.h` **does**
+define `mutex_init`, with a different four-argument shape
+(`mutex_init(m, nm, f, i)`, name second). Without the `#undef` the 6.5-style
+three-argument call expands wrongly. `mutex_lock`/`mutex_unlock`/`mutex_trylock`
+are not defined by 5.3 at all — it uses `mutex_enter`/`mutex_exit`.
 
 ### Why the protocol code is duplicated
 
@@ -118,8 +139,7 @@ hoist that shared region into a common `dp_proto.c` included by both and delete
 
 ## Before first boot
 
-These could not be confirmed without a 5.3 system. Each is marked `XXX53` in
-the source.
+Almost all of this is now settled. The remaining risk is concentrated in §1.
 
 ### 1. `struct etherif` layout — highest risk
 
@@ -143,43 +163,76 @@ of surfacing as mystery corruption days later. Cost is 32 bytes per interface.
 It is a diagnostic, not a safety net — if it fires the softc is already
 corrupt, so do not bring the interface up.
 
-Confirm the entry points exist at all:
+**`ether_attach` itself is confirmed present**, along with `ether_input`,
+`ether_stop` and `ether_selfsnoop`, in the `/unix` of a stock 5.3 IP22 install:
 
 ```sh
 nm /unix | grep -E 'ether_attach|ether_input|ether_stop'
 ```
 
-If `ether_attach` is absent from the 5.3 kernel, this port needs rethinking:
-SGI's 5.3 documentation only ever describes the raw `ifnet` interface, and
-falling back to it means hand-writing `if_output` with `ip_arpresolve` across
-`AF_INET` / `AF_UNSPEC` / `AF_RAW` / `AF_SDL` — roughly 250 lines that
-`ether_attach` currently provides for free.
+That was the finding that validated this whole approach — had it been absent,
+the port would have needed a hand-written `if_output` with `ip_arpresolve`
+across `AF_INET` / `AF_UNSPEC` / `AF_RAW` / `AF_SDL`, roughly 250 lines that
+`ether_attach` provides for free. (`ether_detach` and `ether_reattach` are
+absent, as expected — they exist only for 6.x loadable drivers, and this driver
+has no unload path.)
 
-### 2. `cpsema()` return sense
+What the symbol table cannot tell us is the *layout*, since the kernel carries
+no struct debug info. Hence the canary.
 
-`mutex_trylock` maps to `cpsema`. It must return non-zero **only** when the lock
-was actually taken. The 5.3 manual describes the failure case as "semaphore
-count is already less than 0", but for a mutex initialised to 1 the would-block
-case is count `<= 0`. If `cpsema` has the other sense, `dp_eio_transmit()` can
-re-enter `dp_runqueue()` concurrently and corrupt the TX ring.
+### 2. `cpsema()` return sense — resolved
 
-Check `sys/sema.h`. If unsure, build with `-DDP_NO_TRYLOCK`: that disables the
-transmit-side queue kick, which is only an optimisation — the 10 ms poll timer
-still drains the ring. Slightly higher latency, no correctness risk.
+`mutex_trylock` maps to `cpsema`, and it must return non-zero **only** when the
+lock was actually taken. `sys/sema.h` settles it: on a uniprocessor build it
+aliases `apcpsema(x)` to `1` — "conditional acquire always succeeds" — which
+only type-checks as a success indicator if non-zero means acquired. The mapping
+is correct.
 
-### 3. Everything else
+`-DDP_NO_TRYLOCK` remains available if the TX ring is ever suspected. It
+disables the transmit-side queue kick, which is a latency optimisation only —
+the 10 ms poll timer still drains the ring.
 
-| Item | Check |
+### 3. Everything else — resolved
+
+These were open in the first draft. All were settled by extracting headers and
+the `/unix` symbol table straight out of an IRIX 5.3 IP22 disk image with
+`rb-cli` — no booting required:
+
+| Item | Finding |
 |---|---|
-| `kmem_zalloc` flags | Does 5.3 accept `KM_SLEEP`? It may want `0` for sleep and `VM_NOSLEEP` for the opposite. `VM_DIRECT`/`VM_CACHEALIGN` are needed so the adapter can DMA straight into the buffer. |
-| `plbase` | Fourth argument to `itimeout()`. If absent, `#define plbase 0`. |
-| `toid_t`, `itimeout`, `untimeout` | Confirm in `sys/ddi.h`. If `toid_t` does not exist, `int` is the substitute. |
-| `m_vget` | RX allocates with `m_vget(M_DONTWAIT, len, MT_DATA)`. Confirm in `sys/mbuf.h`. |
-| `scsi_driver_table` sentinel | `dp_probe_one()` treats 0 as "no adapter". Confirm no real `SCSIDRIVER_*` constant is 0 on your platform. |
-| master.d flags | `cs` follows the 5.3 manual. If lboot rejects it, check `master(4)`. |
-| `sprintf` in kernel | Used for the MAC and log strings. |
+| `kmem_zalloc` flags | `KM_SLEEP` is 0 in `sys/kmem.h`; `sys/immu.h` gives `VM_DIRECT` 0x0100, `VM_CACHEALIGN` 0x0800. All native. |
+| `plbase`, `itimeout`, `untimeout`, `toid_t` | All in `sys/ddi.h`: `extern pl_t plbase`, `toid_t itimeout(void (*)(), void *, long, pl_t, ...)`. Correct as written. |
+| `m_vget` | `extern struct mbuf *m_vget(int, int, int)` in `sys/mbuf.h`. |
+| `scsi_driver_table` sentinel | `SCSIDRIVER_NULL` is 0 — the check was right, and now uses the constant. |
+| `mutex_init` collision | 5.3 **does** define it, as `mutex_init(m, nm, f, i)` — four args, name second. The shim's `#undef` is load-bearing, not defensive. |
+| `mutex_t` | 5.3 spells it `kmutex_t`. Nothing to collide with; the softc uses `sema_t`. |
 | `//` comments | The 5.3 compiler is pre-C99. This file uses only `/* */`; keep it that way. |
 
+Every kernel symbol the driver references was confirmed present in the 5.3
+`/unix`: `ether_attach`, `ether_input`, `add_to_inventory`, `m_vget`,
+`m_freem`, `psema`, `vsema`, `cpsema`, `initnsema`, `initnsema_mutex`,
+`freesema`, `itimeout`, `untimeout`, `kmem_zalloc`, `kmem_free`, `sprintf`,
+`cmn_err`, `delay`, `scsi_driver_table`, `scsi_info`, `scsi_alloc`,
+`scsi_free`, `scsi_command`.
+
+Still genuinely open: the `struct etherif` layout (§1), whether lboot accepts
+the master.d flags, and of course whether it moves a packet.
+
+### 4. `CPUBOARD` is mandatory
+
+5.3's `/var/sysgen/Makefile.kernio` wraps its entire body in
+`#if defined(CPUBOARD) && !empty(CPUBOARD)` and defines `CFLAGS` only inside
+it. **With `CPUBOARD` unset you get an empty `CFLAGS`** — no `-D_KERNEL`, no
+`-coff`, no R4000 errata workarounds — which compiles happily and produces an
+object that would wreck the kernel. The Makefile defaults it to `IP22`; check
+`hinv` and override if you are on something else.
+
+The driver also deliberately does **not** pass `-D_MP_NETLOCKS -DMP`. The 5.3
+driver guide mentions them for multi-threaded TCP/IP, but `Makefile.kernio`
+passes them for no board at all, so a stock kernel is not built with them.
+Setting them when the kernel was not changes the size of `struct ifnet` — and
+therefore of the `struct etherif` embedded in the softc — which is exactly the
+silent-corruption failure of §1.
 ## Known risks once it does boot
 
 **Cache coherency.** The driver sets `SRF_FLUSH` and allocates its buffers
