@@ -237,9 +237,21 @@ dp_scsi_cmd_locked(struct dp_softc *sc, u_char *cdb, int cdblen,
                    void *buf, int buflen, ushort dir)
 {
     int status;
+#ifdef DP_ASYNC_RX
+    /* The target answers one command at a time and the async engine may have
+     * one outstanding. Claim the device: dp_fg stops new submissions, then
+     * wait for any in-flight one. User context here, so delay() is legal. */
+    sc->dp_fg++;
+    while (sc->dp_abusy)
+        delay(1);
+#endif
     mutex_lock(&sc->dp_qlock, PZERO);
     status = dp_scsi_cmd(sc, cdb, cdblen, buf, buflen, dir);
     mutex_unlock(&sc->dp_qlock);
+#ifdef DP_ASYNC_RX
+    sc->dp_fg--;
+    dp_async_tick(sc);          /* resume polling */
+#endif
     return status;
 }
 
@@ -324,34 +336,25 @@ dp_get_mac(struct dp_softc *sc, u_char *mac)
  * ----------------------------------------------------------------------- */
 
 static int
-dp_do_rx(struct dp_softc *sc)
+/* dp_rx_parse - dispatch every frame packed into dp_rxbuf by a completed
+ * READ. Split out of dp_do_rx() so the asynchronous path (5.3, see
+ * DP_ASYNC_RX) can reuse it from a completion routine, where issuing a new
+ * SCSI command is fine but sleeping is not.
+ *
+ * Returns 1 if the device said more packets are queued, 0 otherwise, and
+ * -1 if it reported a drop (the caller decides whether it is in a context
+ * that may run the disable/enable/set-mode recovery, which sleeps). */
+int
+dp_rx_parse(struct dp_softc *sc)
 {
-    u_char cdb[6];
     struct ifnet *ifp = eiftoifp(&sc->dp_eif);
     uint pktlen, flags, framelen, mbuflen;
     struct mbuf *m;
     struct etherbufhead *ebh;
     int snoopflags;
-    int err;
     u_char *p;
     u_char *end;
     int last_more;
-
-    cdb[0] = DP_READ;
-    cdb[1] = 0;
-    cdb[2] = 0;
-    cdb[3] = (DP_RX_BUFLEN >> 8) & 0xFF;
-    cdb[4] = DP_RX_BUFLEN & 0xFF;
-    cdb[5] = DP_READ_FLAGS;
-
-    bzero(sc->dp_rxbuf, DP_RX_BUFSZ);
-
-    err = dp_scsi_cmd(sc, cdb, 6, sc->dp_rxbuf, DP_RX_BUFLEN, SRF_DIR_IN);
-    if (err != 0) {
-        SCSILOG((CE_NOTE, "dp%d: rx READ failed sr_status=%d\n",
-               sc->dp_unit, err));
-        return 0;
-    }
 
     p        = sc->dp_rxbuf;
     end      = sc->dp_rxbuf + DP_RX_BUFLEN;
@@ -372,11 +375,8 @@ dp_do_rx(struct dp_softc *sc)
                sc->dp_unit, pktlen, flags));
 
         if (flags == DP_RX_DROPPED) {
-            cmn_err(CE_WARN, "dp%d: packet dropped, resetting\n", sc->dp_unit);
-            dp_enable(sc, 0);
-            dp_enable(sc, 1);
-            dp_set_mode(sc);
-            return 0;
+            cmn_err(CE_WARN, "dp%d: packet dropped\n", sc->dp_unit);
+            return -1;
         }
 
         if (pktlen <= DP_CRC_LEN) {
@@ -432,6 +432,41 @@ dp_do_rx(struct dp_softc *sc)
     }
 
     return last_more;
+}
+
+/* dp_do_rx - synchronous READ + parse. Sleeps, so it may only be called from
+ * a context that is allowed to: NOT from an itimeout() callback on 5.3. */
+static int
+dp_do_rx(struct dp_softc *sc)
+{
+    u_char cdb[6];
+    int err;
+    int more;
+
+    cdb[0] = DP_READ;
+    cdb[1] = 0;
+    cdb[2] = 0;
+    cdb[3] = (DP_RX_BUFLEN >> 8) & 0xFF;
+    cdb[4] = DP_RX_BUFLEN & 0xFF;
+    cdb[5] = DP_READ_FLAGS;
+
+    bzero(sc->dp_rxbuf, DP_RX_BUFSZ);
+
+    err = dp_scsi_cmd(sc, cdb, 6, sc->dp_rxbuf, DP_RX_BUFLEN, SRF_DIR_IN);
+    if (err != 0) {
+        SCSILOG((CE_NOTE, "dp%d: rx READ failed sr_status=%d\n",
+               sc->dp_unit, err));
+        return 0;
+    }
+
+    more = dp_rx_parse(sc);
+    if (more < 0) {                     /* device dropped: full recovery */
+        dp_enable(sc, 0);
+        dp_enable(sc, 1);
+        dp_set_mode(sc);
+        return 0;
+    }
+    return more;
 }
 
 /* -----------------------------------------------------------------------
@@ -523,6 +558,14 @@ dp_runqueue(struct dp_softc *sc)
 static void
 dp_timer_kick(struct dp_softc *sc)
 {
+#ifdef DP_ASYNC_RX
+    /* 5.3: nothing may sleep here, so hand off to the async engine - it
+     * submits one command and returns. Everything below is the portable
+     * synchronous path, which 6.5 still uses. */
+    sc->dp_timer = 0;
+    dp_async_tick(sc);
+    return;
+#endif
 #ifdef DP_NO_POLL_TIMER
     /* Diagnostic build: no periodic poll at all. RX then only happens when
      * dp_eio_transmit() kicks the queue, which runs in a context where
@@ -798,11 +841,15 @@ dp_eio_transmit(struct etherif *eif,
                sc->dp_unit, pktlen, dststr));
     }
 
+#ifdef DP_ASYNC_RX
+    dp_async_tick(sc);          /* submits it now, or picks it up next tick */
+#else
     /* kick the queue: trylock so we don't block if runqueue is active */
     if (mutex_trylock(&sc->dp_qlock)) {
         dp_runqueue(sc);
         mutex_unlock(&sc->dp_qlock);
     }
+#endif
 
     return 0;
 }
