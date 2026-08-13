@@ -24,6 +24,13 @@
 CPUBOARD=IP28
 BUILTIN=0
 
+# Extra cflags from the caller. Use this rather than MYCFLAGS= on the smake
+# command line: a command-line macro assignment REPLACES the Makefile's own
+# MYCFLAGS, which silently drops $(BUILTIN_CFLAGS) below - and with neither
+# -DDP_BUILTIN nor -DDP_MODULE defined, nothing ever calls dp_scan_invent(),
+# so the driver registers for type 3 and then never attaches to anything.
+XCFLAGS=
+
 #if $(BUILTIN) == "1"
 include /var/sysgen/Makefile.kernio
 BUILTIN_CFLAGS=-DDP_BUILTIN
@@ -46,22 +53,22 @@ MYCFLAGS_IP28=-mips4 -DPTE_64BIT -I.
 MYCFLAGS_IP22=-mips3 -I.
 
 #if $(CPUBOARD) == "IP30"
-MYCFLAGS=$(MYCFLAGS_IP30) $(BUILTIN_CFLAGS)
+MYCFLAGS=$(MYCFLAGS_IP30) $(BUILTIN_CFLAGS) $(XCFLAGS)
 LDFLAGS=$(LDFLAGS_IP30) -v
 #elif $(CPUBOARD) == "IP32"
-MYCFLAGS=$(MYCFLAGS_IP32) $(BUILTIN_CFLAGS)
+MYCFLAGS=$(MYCFLAGS_IP32) $(BUILTIN_CFLAGS) $(XCFLAGS)
 LDFLAGS=$(LDFLAGS_IP32) -v
 #elif $(CPUBOARD) == "IP35"
-MYCFLAGS=$(MYCFLAGS_IP35) $(BUILTIN_CFLAGS)
+MYCFLAGS=$(MYCFLAGS_IP35) $(BUILTIN_CFLAGS) $(XCFLAGS)
 LDFLAGS=$(LDFLAGS_IP35) -v
 #elif $(CPUBOARD) == "IP28"
-MYCFLAGS=$(MYCFLAGS_IP28) $(BUILTIN_CFLAGS)
+MYCFLAGS=$(MYCFLAGS_IP28) $(BUILTIN_CFLAGS) $(XCFLAGS)
 LDFLAGS=$(LDFLAGS_IP28) -v
 #elif $(CPUBOARD) == "IP22"
-MYCFLAGS=$(MYCFLAGS_IP22) $(BUILTIN_CFLAGS)
+MYCFLAGS=$(MYCFLAGS_IP22) $(BUILTIN_CFLAGS) $(XCFLAGS)
 LDFLAGS=$(LDFLAGS_IP22) -v
 #else
-MYCFLAGS=$(BUILTIN_CFLAGS) -I.
+MYCFLAGS=$(BUILTIN_CFLAGS) -I. $(XCFLAGS)
 LDFLAGS=-nostdlib -v
 #endif
 
@@ -125,6 +132,10 @@ help:
 	@echo ""
 	@echo "Variables:"
 	@echo "  CPUBOARD   Target board: IP22 IP30 IP32 IP35  (default: $(CPUBOARD))"
+	@echo "  BUILTIN    1 = link into the kernel (-DDP_BUILTIN), 0 = loadable"
+	@echo "             module (-DDP_MODULE).  Default: $(BUILTIN)"
+	@echo "  XCFLAGS    Extra cflags.  Use this, not MYCFLAGS= - see the note"
+	@echo "             at the top of this Makefile."
 	@echo ""
 	@echo "Debug:"
 	@echo "  -DDP_LOG       init/attach/enable/reset events"

@@ -216,8 +216,18 @@ boot_guest() {
 		ser_send "$ROOT_PW"
 		sleep 2
 	else
-		echo ">>> booting multiuser"
-		ser_send "1"
+		# Drive the command monitor rather than PROM option 1 ("Start
+		# System"), which boots the default /unix. autoconfig stages the
+		# new kernel as /unix.install and only a clean shutdown promotes
+		# it, so option 1 silently boots the OLD kernel - indistinguishable
+		# from "the driver never initialised". Same reasoning as 5.3 above.
+		echo ">>> booting multiuser ($_kern)"
+		ser_send "5"
+		ser_wait ">>" 30 || die "command monitor prompt not seen"
+		ser_send "boot -f dksc(0,1,8)sash"
+		ser_wait "sash" 60 || die "sash never loaded"
+		sleep 1
+		ser_send "boot -f dksc(0,1,0)$_kern"
 		ser_wait_long "console login" 3 "console login prompt" || return 1
 		if [ -n "$ROOT_PW" ]; then CI -q login root --password "$ROOT_PW"
 		else CI -q login root; fi
@@ -244,7 +254,21 @@ echo ">>> compiling ($RELEASE, CPUBOARD=$CPUBOARD)"
 ser_send "rm -rf /tmp/dpb; mkdir /tmp/dpb && cp -r /mnt/src/* /tmp/dpb && cd /tmp/dpb && echo DP-'COPY'-OK"
 ser_wait "DP-COPY-OK" 60 || { tail -10 "$CONSOLE" >&2; exit 1; }
 
-ser_send "cd /tmp/dpb && smake CPUBOARD=$CPUBOARD MYCFLAGS=\"$EXTRA_CFLAGS\" && echo DP-'BUILD'-OK || echo DP-'BUILD'-FAIL"
+# 6.5's Makefile builds a loadable module by default (BUILTIN=0 -> -DDP_MODULE)
+# but this pipeline hands dp.o to autoconfig, which links it INTO the kernel -
+# so it must be a BUILTIN=1 build. And the extra cflags go in XCFLAGS, not
+# MYCFLAGS: a command-line MYCFLAGS= replaces the Makefile's own definition and
+# takes $(BUILTIN_CFLAGS) with it, leaving neither -DDP_BUILTIN nor -DDP_MODULE
+# defined. dp_scan_invent() is then compiled out of both paths, and the driver
+# registers for SCSI type 3 at boot and never attaches to anything - it looks
+# exactly like "no DaynaPort on the bus". 5.3 has no such switch (its dp_init
+# always scans), so it keeps using MYCFLAGS.
+if [ "$RELEASE" = 6.5 ]; then
+	_build="smake CPUBOARD=$CPUBOARD BUILTIN=1 XCFLAGS=\"$EXTRA_CFLAGS\""
+else
+	_build="smake CPUBOARD=$CPUBOARD MYCFLAGS=\"$EXTRA_CFLAGS\""
+fi
+ser_send "cd /tmp/dpb && $_build && echo DP-'BUILD'-OK || echo DP-'BUILD'-FAIL"
 if ! ser_wait_long "DP-BUILD-OK" 3 "native compile"; then
 	echo "iris-build: COMPILE FAILED — console tail:" >&2
 	tail -40 "$CONSOLE" >&2

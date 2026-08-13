@@ -1,0 +1,89 @@
+--- /Users/dani/repos/irixdayna/irix5.3/if_dp.c	2026-08-12 21:37:57.168930080 -0400
++++ /private/tmp/claude-501/-Users-dani-repos-iris/a067211f-6ec7-408b-8f72-93fe8b3cc848/scratchpad/irixdayna-test/irix5.3/if_dp.c	2026-08-12 23:07:47.333530019 -0400
+@@ -688,7 +688,10 @@
+ {
+     sc->dp_enabled = 0;
+     mutex_lock(&sc->dp_qlock, PZERO);
+-    sc->dp_timer = 0;   /* by now timer has either fired or been cancelled by runqueue */
++    if (sc->dp_timer) {         /* it is armed far more often than not */
++        untimeout(sc->dp_timer);
++        sc->dp_timer = 0;
++    }
+     mutex_unlock(&sc->dp_qlock);
+ }
+ 
+@@ -750,6 +753,12 @@
+ 
+     DPLOG((CE_NOTE, "dp%d: eio_reset\n", sc->dp_unit));
+ 
++    if (sc->dp_enabled) {
++        DPLOG((CE_NOTE, "dp%d: eio_reset: already up, skipping bounce\n",
++               sc->dp_unit));
++        return;
++    }
++
+     dp_runqueue_stop(sc);
+     dp_enable(sc, 0);
+     dp_enable(sc, 1);
+@@ -1046,6 +1055,13 @@
+  * a DaynaPort.  Returns 1 if attached.
+  * ----------------------------------------------------------------------- */
+ 
++/* diagnostic only: peripheral device type from a target's cached INQUIRY */
++static int
++inq_type_of(struct scsi_target_info *ti)
++{
++    return (ti == NULL || ti->si_inq == NULL) ? -1 : (ti->si_inq[0] & 0x1F);
++}
++
+ static int
+ dp_probe_one(int adap, int target, int lun)
+ {
+@@ -1060,13 +1076,21 @@
+      * SCSIDRIVER_NULL (0) marks a slot with no adapter behind it.
+      */
+     drvnum = scsi_driver_table[adap];
+-    if (drvnum == SCSIDRIVER_NULL)
++    if (drvnum == SCSIDRIVER_NULL) {
++        DPLOG((CE_NOTE, "dp: probe %d/%d/%d: no adapter (drvnum NULL)\n",
++               adap, target, lun));
+         return 0;
++    }
+ 
+     /* scsi_info issues an INQUIRY; NULL means nothing is there. */
+     tinfo = (*scsi_info[drvnum])((u_char)adap, (u_char)target, (u_char)lun);
+-    if (tinfo == NULL || tinfo->si_inq == NULL)
++    if (tinfo == NULL || tinfo->si_inq == NULL) {
++        DPLOG((CE_NOTE, "dp: probe %d/%d/%d: drvnum=%d but no target info\n",
++               adap, target, lun, drvnum));
+         return 0;
++    }
++    DPLOG((CE_NOTE, "dp: probe %d/%d/%d: inq type %d\n",
++           adap, target, lun, inq_type_of(tinfo)));
+ 
+     inq = tinfo->si_inq;
+ 
+@@ -1126,5 +1150,23 @@
+ dp_init(void)
+ {
+     cmn_err(CE_NOTE, "dp: DaynaPort SCSI/Link driver (IRIX 5.3)\n");
++    /* Kept only to show it finds nothing this early: io_init[] runs dp_init
++     * 4th, before dkscinit/dsinit and before the host adapter has scanned the
++     * bus, so scsi_info() has no cached INQUIRY yet. The real scan is in
++     * dp_start() below. */
+     dp_scan_bus();
+ }
++
++/* -----------------------------------------------------------------------
++ * dp_start - lboot puts <prefix>start into master.c's io_start[], which the
++ * kernel calls after every io_init[] and after device configuration. That is
++ * the first point where scsi_info() can answer, and where sleeping is legal.
++ * ----------------------------------------------------------------------- */
++
++void
++dp_start(void)
++{
++    cmn_err(CE_NOTE, "dp: start-phase bus scan\n");
++    if (dp_nunit == 0)
++        dp_scan_bus();
++}
