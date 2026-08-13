@@ -1,5 +1,14 @@
 # Task: make the IRIX 5.3 DaynaPort driver attach and survive `ifconfig up`
 
+> **DONE — kept for the reasoning, not as a work item.** Everything described
+> below was implemented in commits `3b9ab26`, `c4b328d`, `a3f5f47` and
+> `d1c3cf5`. 5.3 now attaches, reads its MAC, resolves ARP and pings 4/4 under
+> emulation. Two things turned out differently from the guesses in §4: the
+> `ifconfig up` panic was `ifptoeif()` in the watchdog, not the shared
+> `scsi_request_t` (splitting that fixed nothing and was reverted), and the
+> poll had to become fully asynchronous because 5.3 ships no kernel-thread API.
+> Current state: `irix5.3/RESUME.md` §1.
+
 Hand this to an agent (or a human) working in the **`irixdayna`** repo, branch
 `irix-53`. It is written against the driver as of 2026-08-12 and every claim
 below was observed on a real run, with the console output quoted.

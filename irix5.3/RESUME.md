@@ -9,39 +9,61 @@ several obvious-looking "improvements" are wrong for reasons captured here.
 
 ## 1. State of the work
 
-**The driver compiles and links into a working kernel on IRIX 5.3/IP22. It has
-never moved a packet.**
+**The driver moves packets on IRIX 5.3/IP22, under emulation. It has never run
+on hardware.**
 
-Verified, by actually running it:
+Verified, by actually running it (2026-08-13):
 
+- `ping` over `dp0` to the gateway: **4 transmitted, 4 received, 0% loss**,
+  48/74/119 ms. ARP resolves; `telnet` to the gateway gets a RST back
+  ("Connection refused"), so a TCP handshake crosses the bus in both
+  directions.
+- `dp0` attaches: `NOTICE: dp0: DaynaPort SCSI/Link at scsi(0) target 3 lun 0`,
+  and the MAC is read from the device via RETRIEVE STATISTICS
+  (`dp0: MAC 0:80:19:44:50:3`) rather than the `00:80:19:00:00:NN` placeholder.
+- **`ether_attach()` is reached and `DP_CHECK_ETHERIF` does not trip.** The
+  `struct etherif` reconstruction in `sgi_ether.h` is sound - that unknown,
+  ranked first in section 5 for good reason, is now closed for IP22/5.3.
 - Compiles clean with SGI's own `cc` and the exact IP22 kernel CFLAGS, inside
-  an emulated Indy (`scripts/iris-build.sh --release 5.3`).
-- `autoconfig -f` links a real kernel with the driver in it — every symbol
-  resolves (`--autoconfig`).
-- That kernel **boots**, and `dp_init()` runs its SCSI bus scan against the
-  emulated WD33C93 without panicking, printing
-  `NOTICE: dp: DaynaPort SCSI/Link driver (IRIX 5.3)` (`--boot-test`).
-- lboot accepts `master.d/dp`: the generated `/var/sysgen/master.c` carries
-  `dp_init` in the boot init table and `dp_open`/`dp_close`/`dp_ioctl` in the
-  cdevsw entry. That settles the master-file flags question.
-- The drift checker works in both directions (tested by perturbing `dp_do_rx`
-  and confirming it produces a diff, then restoring).
-- 501 lines are byte-identical between `irix5.3/if_dp.c` and `../if_dp.c`.
-- The 6.5 driver is untouched — `git diff main -- if_dp.c Makefile master.d/`
-  is empty.
+  an emulated Indy; `autoconfig -f` links a kernel and that kernel boots.
+- Cross-compiles for IP12 (Indigo R3000) with the right R3000 flag set - see
+  the README. Compiled only; never booted on an Indigo.
+- drift.sh clean at 650 shared lines.
 
-**Not** verified: that it moves a packet, or that `struct etherif` is right.
-IRIS has no DaynaPort SCSI target, so `dp_do_attach()` — and therefore
-`ether_attach()` and the `DP_CHECK_ETHERIF` canary — is never reached. A green
-pipeline run is not "it works".
+What made this testable: `docs/iris-daynaport-target.md` was implemented. IRIS
+now emulates a DaynaPort SCSI/Link target (`--features daynaport`,
+`kind = "daynaport"` on any `[scsi.N]`), so the whole ladder runs headless -
+`scripts/dp-ladder.sh --release 5.3` drives it. The emulator side needed no
+corrections at all; every bug the ladder found was in this driver.
 
-The way out of that is `docs/iris-daynaport-target.md`: a task spec for adding
-a DaynaPort target to the IRIS emulator. IRIS already has everything needed —
-`src/net.rs`'s `NatEngine` and the `rtrb` frame-ring pattern that
-`src/seeq8003.rs` uses — so the work is a new SCSI device kind with the five
-vendor CDBs on the front and the existing NAT backend behind it. That would
-close the last gap and make the whole ladder (detect → MAC → ARP → ping → TCP)
-runnable in CI.
+Four of them, all invisible until something finally answered an INQUIRY:
+
+1. **The bus scan ran too early.** `master.c` calls `dp_init` fourth in
+   `io_init[]`, before the host adapter has scanned the bus, so `scsi_info()`
+   returned NULL for every target and the scan silently found nothing. Now in
+   `dp_start()`, which lboot puts in `io_start[]`.
+2. **`ifptoeif()` is not usable on 5.3.** It is a raw cast assuming the
+   kernel's `ifnet` sits at offset 0 of the real `struct etherif`. It does not,
+   so `eif_private` read as 0 and the first watchdog tick after `ifconfig up`
+   panicked (`Bad addr: 0x0`, 16 bytes into `dp_eio_watchdog` per `nm` on the
+   linked kernel). The watchdog now finds its softc by matching `ifp`. Note
+   what this means: the canary in section 5 guards the bytes *after* `dp_eif`,
+   not the offsets of members *inside* it, so it cannot catch this class.
+3. **The poll cannot sleep.** `dp_runqueue()` issued SCSI commands and waited
+   in `psema()` from an `itimeout()` callback. 6.5 runs those on a thread; 5.3
+   runs them on the interrupt/IDLE stack, where the sleep resumes at address 0
+   (`PANIC: exception on IDLE stack ... epc:0x0`). 5.3 ships no kernel-thread
+   API to move it into, so the packet path is now asynchronous under
+   `DP_ASYNC_RX` (on by default in `irix5.3/Makefile`): the tick submits one
+   command and returns, the completion parses and submits the next.
+4. **A fired `itimeout` handle is dead**, and `untimeout()` on it corrupts the
+   callout list - which surfaces much later as a dispatch through a null
+   callback.
+
+Still **not** verified: real hardware. Everything above is against an emulated
+target that answers instantly; a BlueSCSI/ZuluSCSI on a real bus does not.
+Section 5's remaining unknowns are timing, sustained multi-packet READ, and
+`struct etherif` on any kernel other than 5.3/IP22.
 
 ### Repo layout
 
@@ -292,7 +314,24 @@ present there — a rejected master file is otherwise quiet.
 
 Each corresponds to an `XXX53` marker in the source.
 
-### 5.1 `struct etherif` layout — HIGHEST RISK
+### 5.1 `struct etherif` layout — was HIGHEST RISK, now partly settled
+
+**Update 2026-08-13: the canary has been run.** `ether_attach()` is reached on
+5.3/IP22 under emulation with `-DDP_CHECK_ETHERIF` compiled in, and it does not
+trip — so on that kernel the member list below is right. Two caveats keep this
+section alive rather than deleted:
+
+- The canary only guards the bytes *after* `dp_eif`. It cannot see a wrong
+  *offset within* the struct, and that is not hypothetical: `ifptoeif()` — the
+  cast that assumes the kernel's `ifnet` sits at offset 0 of the real
+  `etherif` — turned out to be wrong on 5.3 and panicked the watchdog. The
+  driver no longer uses it. Assume any other layout assumption is equally
+  unverified.
+- It has been checked on exactly one kernel. An IP12/R3000 build is a
+  different `struct ifnet`, hence a different `etherif`. Build the first
+  kernel on any new board with the canary.
+
+The original analysis, still worth reading:
 
 `sgi_ether.h` here is a reconstruction derived from the 6.5 copy (revision
 1.15) with the `INET6` member removed. If the real 5.3 member list differs,
