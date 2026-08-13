@@ -52,6 +52,11 @@
 #   scripts/iris-build.sh --release 5.3 [--image PATH] [--iris-dir ../iris]
 #       [--config ci/iris-irix53.toml] [--rb-cli rb-cli] [--outdir dist]
 #       [--workdir DIR] [--fresh] [--autoconfig] [--boot-test] [--cflags "..."]
+#       [--cpuboard IP12]
+#
+# --cpuboard cross-builds the 5.3 object for another board (IP12 Indigo R3000,
+#   IP20, IP19...). The guest is an IP22, so this compiles only: link it into a
+#   kernel with autoconfig on the target machine.
 #
 # Boot disk resolution (first match wins):
 #   1. --image PATH
@@ -74,6 +79,7 @@ FRESH=0
 DO_AUTOCONFIG=0
 DO_BOOTTEST=0
 EXTRA_CFLAGS="-I. -DDP_LOG -DDP_LOG_SCSI -DDP_CHECK_ETHERIF"
+CPUBOARD_OVERRIDE=""
 ROOT_PW="${IRIX_ROOT_PASSWORD:-}"
 
 die() { echo "iris-build: $*" >&2; exit 1; }
@@ -88,6 +94,7 @@ while [ $# -gt 0 ]; do
 		--outdir)     OUTDIR="$2"; shift 2 ;;
 		--workdir)    WORKDIR="$2"; shift 2 ;;
 		--cflags)     EXTRA_CFLAGS="$2"; shift 2 ;;
+		--cpuboard)   CPUBOARD_OVERRIDE="$2"; shift 2 ;;
 		--fresh)      FRESH=1; shift ;;
 		--autoconfig) DO_AUTOCONFIG=1; shift ;;
 		--boot-test)  DO_AUTOCONFIG=1; DO_BOOTTEST=1; shift ;;
@@ -129,6 +136,18 @@ CI_BIN="$IRIS_DIR/target/release/iris-ci"
 [ -n "$RB" ] || RB=$(conf_get RB_CLI)
 [ -n "$RB" ] || RB="rb-cli"
 command -v "$RB" >/dev/null 2>&1 || [ -x "$RB" ] || die "rb-cli not found ($RB)"
+
+# Cross-compiling for another board: the object is built here but must be
+# linked into a kernel ON THAT MACHINE, so refuse autoconfig/boot-test - they
+# would link and boot an IP12 (say) driver into this IP22 guest's kernel.
+if [ -n "$CPUBOARD_OVERRIDE" ]; then
+	CPUBOARD="$CPUBOARD_OVERRIDE"
+	if [ "$CPUBOARD" != IP22 ] && [ "$DO_AUTOCONFIG" = 1 ]; then
+		die "--cpuboard $CPUBOARD builds an object for another machine; \
+--autoconfig/--boot-test would link it into this guest's kernel. Compile \
+only, then run autoconfig on the target."
+	fi
+fi
 
 [ -n "$WORKDIR" ] || WORKDIR=$(mktemp -d /tmp/dpbuild.XXXXXX)
 mkdir -p "$WORKDIR"

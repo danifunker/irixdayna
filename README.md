@@ -122,6 +122,52 @@ defines `CFLAGS` only inside `#if defined(CPUBOARD)`, so an unset value yields
 an EMPTY `CFLAGS` - no `-D_KERNEL`, no `-coff`, no R4000 errata workarounds. It
 compiles, and produces an object that will wreck the kernel.
 
+### R3000 Indigo (IP12)
+
+`CPUBOARD=IP12` is all it takes - the Makefile deliberately sets no ABI flags
+of its own, so `Makefile.kernio` supplies the right ones per board:
+
+```sh
+cd irix5.3
+smake CPUBOARD=IP12
+smake CPUBOARD=IP12 install
+echo 'INCLUDE: dp' >> /var/sysgen/system/irix.sm
+autoconfig -f && reboot
+```
+
+You can check it picked up the R3000 set by looking at the compile line:
+
+```
+-D_K32U32 -D_KERNEL -DSTATIC=static -DIP12 -DR3000 -Wx,-G8 -non_shared -coff -Wc,-pic0
+```
+
+`-DR3000`, and *no* `-DJUMP_WAR -DPROBE_WAR -DBADVA_WAR` — those three are
+R4000 silicon errata workarounds and only appear for IP20/IP22. If you see an
+empty or R4000 flag set on an Indigo, stop: `CPUBOARD` did not take.
+
+**Cross-building on a faster machine.** The object is o32 COFF and the flags
+come from the board, so an IP12 object can be produced on any 5.3 host - for
+instance inside the emulator, which is far faster than an Indigo:
+
+```sh
+scripts/iris-build.sh --release 5.3 --cpuboard IP12 \
+    --cflags "-DDP_LOG -DDP_CHECK_ETHERIF"
+# -> dist/dp-irix53.o, built with -DIP12 -DR3000
+```
+
+Copy that to the Indigo as `/var/sysgen/boot/dp.o` together with
+`master.d/dp`, then run `autoconfig -f` **there** — the kernel must be linked
+on the machine that will boot it. `--cpuboard` refuses `--autoconfig` and
+`--boot-test` for exactly this reason: the emulated guest is an IP22 and would
+otherwise link a foreign object into its own kernel.
+
+**Untested on IP12 hardware.** It compiles clean for R3000 and the driver
+contains no assembly, no DMA setup and no cache maintenance of its own, so
+there is nothing obviously board-specific in it — but nobody has booted it on
+an Indigo. Build with `-DDP_CHECK_ETHERIF`: `struct etherif` comes from a
+reconstructed header, and an R3000 kernel is a different `struct ifnet` from
+the one this was checked against.
+
 Then add the driver to `/var/sysgen/system/irix.sm`:
 
 ```
