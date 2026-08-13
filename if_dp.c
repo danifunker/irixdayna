@@ -335,7 +335,6 @@ dp_get_mac(struct dp_softc *sc, u_char *mac)
  * Returns 1 if DP_RX_MORE was set on the last frame (issue another READ).
  * ----------------------------------------------------------------------- */
 
-static int
 /* dp_rx_parse - dispatch every frame packed into dp_rxbuf by a completed
  * READ. Split out of dp_do_rx() so the asynchronous path (5.3, see
  * DP_ASYNC_RX) can reuse it from a completion routine, where issuing a new
