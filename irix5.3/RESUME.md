@@ -35,6 +35,14 @@ IRIS has no DaynaPort SCSI target, so `dp_do_attach()` — and therefore
 `ether_attach()` and the `DP_CHECK_ETHERIF` canary — is never reached. A green
 pipeline run is not "it works".
 
+The way out of that is `docs/iris-daynaport-target.md`: a task spec for adding
+a DaynaPort target to the IRIS emulator. IRIS already has everything needed —
+`src/net.rs`'s `NatEngine` and the `rtrb` frame-ring pattern that
+`src/seeq8003.rs` uses — so the work is a new SCSI device kind with the five
+vendor CDBs on the front and the existing NAT backend behind it. That would
+close the last gap and make the whole ladder (detect → MAC → ARP → ping → TCP)
+runnable in CI.
+
 ### Repo layout
 
 ```
