@@ -85,6 +85,15 @@ CI_BIN="$IRIS_DIR/target/release/iris-ci"
 grep -q 'kind[ 	]*=[ 	]*"daynaport"' "$CONFIG" \
 	|| die "$CONFIG has no [scsi.N] kind = \"daynaport\" target"
 
+# Boot the kernel the build just linked, which lives in that build's overlay.
+# iris-build.sh puts it in <its workdir>/overlay; --work-hda points into the
+# same workdir, so derive it. Override by setting IRIS_CHD_DIFF_DIR yourself.
+if [ -z "${IRIS_CHD_DIFF_DIR:-}" ] && [ -n "$WORK_HDA" ]; then
+	_bd=$(cd "$(dirname "$WORK_HDA")" && pwd)
+	[ -d "$_bd/overlay" ] && IRIS_CHD_DIFF_DIR="$_bd/overlay"
+fi
+[ -n "${IRIS_CHD_DIFF_DIR:-}" ] && export IRIS_CHD_DIFF_DIR
+
 WORKDIR=$(mktemp -d /tmp/dpladder.XXXXXX)
 CONSOLE="$WORKDIR/console.log"
 SOCK="/tmp/iris-dpl.$$.sock"

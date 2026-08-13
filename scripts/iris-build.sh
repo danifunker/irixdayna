@@ -152,6 +152,18 @@ fi
 [ -n "$WORKDIR" ] || WORKDIR=$(mktemp -d /tmp/dpbuild.XXXXXX)
 mkdir -p "$WORKDIR"
 
+# Give this run its own CHD overlay. Without this every run writes the same
+# <image>.diff.chd beside the boot disk, so a --fresh in one run deletes the
+# kernel another run is about to boot, and a run that panics leaves a dirty
+# filesystem for the next one ("PANIC: init died"). IRIS honours
+# IRIS_CHD_DIFF_DIR (it exists for the macOS sandbox); pointing it at the
+# workdir makes runs independent and makes --fresh mean "this run", not "every
+# run". Set it yourself to share an overlay deliberately - dp-ladder.sh does
+# that to boot the kernel a build just linked.
+: "${IRIS_CHD_DIFF_DIR:=$WORKDIR/overlay}"
+export IRIS_CHD_DIFF_DIR
+mkdir -p "$IRIS_CHD_DIFF_DIR"
+
 SOCK="/tmp/iris-dp.$$.sock"
 STAGE="$WORKDIR/stage"
 HDA="$WORKDIR/work.hda"
@@ -202,7 +214,8 @@ rm -f "$HDA"
 
 # ---- 3. launch iris --------------------------------------------------------
 if [ "$FRESH" = 1 ]; then
-	echo ">>> --fresh: dropping overlay ${IMAGE}.diff.chd"
+	echo ">>> --fresh: dropping overlay in $IRIS_CHD_DIFF_DIR"
+	rm -f "$IRIS_CHD_DIFF_DIR"/*.diff.chd
 	rm -f "${IMAGE}.diff.chd" "${IMAGE}.overlay" "${IMAGE}.overlay.dirty"
 fi
 
