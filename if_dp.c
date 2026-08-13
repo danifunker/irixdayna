@@ -558,11 +558,11 @@ static void
 dp_timer_kick(struct dp_softc *sc)
 {
 #ifdef DP_ASYNC_RX
-    /* 5.3: nothing may sleep here, so hand off to the async engine - it
-     * submits one command and returns. Everything below is the portable
-     * synchronous path, which 6.5 still uses. */
+    /* 5.3: nothing may sleep here, so hand off to the async engine - it arms
+     * the next tick and submits one command, then returns. Everything below
+     * is the portable synchronous path, which 6.5 still uses. */
     sc->dp_timer = 0;
-    dp_async_tick(sc);
+    dp_async_poll(sc);
     return;
 #endif
 #ifdef DP_NO_POLL_TIMER

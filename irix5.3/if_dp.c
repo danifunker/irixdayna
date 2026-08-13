@@ -331,6 +331,7 @@ static void dp_timer_kick(struct dp_softc *);
 #ifdef DP_ASYNC_RX
 extern int  dp_rx_parse(struct dp_softc *);     /* in the shared region */
 static void dp_async_tick(struct dp_softc *);
+static void dp_async_poll(struct dp_softc *);
 static void dp_async_submit(struct dp_softc *);
 static void dp_async_done(scsi_request_t *);
 #endif
@@ -416,15 +417,6 @@ dp_scsi_cmd(struct dp_softc *sc, u_char *cdb, int cdblen,
  * commands stand off against it, because the target answers one initiator
  * command at a time.
  * ======================================================================= */
-
-/* Re-arm the poll. Safe from any context; it only schedules. */
-static void
-dp_async_rearm(struct dp_softc *sc)
-{
-    if (sc->dp_enabled && sc->dp_timer == 0)
-        sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
-                                HZ / 100, plbase);
-}
 
 /* Submit one packet command: a queued transmit if there is one, else a READ.
  * Never sleeps, so it is callable from the timeout callback and from the
@@ -533,22 +525,45 @@ dp_async_done(scsi_request_t *req)
         return;
     }
     sc->dp_chain = 0;
-    dp_async_rearm(sc);
+    /* No re-arm here on purpose - see dp_async_poll(). The timer chain runs
+     * from timeout context and does not depend on this routine. */
 }
 
-/* The poll tick, and the transmit kick. Submits if the engine is idle and no
- * foreground command holds the device; otherwise just comes back later. */
+/* Submit if the engine is idle and no foreground command holds the device.
+ * Never arms anything: callers that need the poll to continue go through
+ * dp_async_poll() below. Safe from any context. */
 static void
 dp_async_tick(struct dp_softc *sc)
 {
     if (!sc->dp_enabled)
         return;
-    if (sc->dp_abusy || sc->dp_fg) {
-        dp_async_rearm(sc);
+    if (sc->dp_abusy || sc->dp_fg)
         return;
-    }
     sc->dp_chain = 0;
     dp_async_submit(sc);
+}
+
+/* The poll proper, called only from dp_timer_kick() i.e. timeout context.
+ *
+ * The re-arm happens HERE, before any submission, and deliberately not in the
+ * completion routine. Timeout context is the only context in which this
+ * driver has ever demonstrably armed a timer - the old synchronous poll
+ * re-armed from dp_runqueue(), reached from this same callback. Re-arming
+ * from a SCSI completion is a different context, and on real hardware the
+ * poll stalls: an idle Indigo answers pings only when something else happens
+ * to kick the engine, giving replies batched seconds apart (2106/1103/98 ms
+ * repeating) with no packet loss at all. Arming from here keeps the chain
+ * alive regardless of what completions do.
+ */
+static void
+dp_async_poll(struct dp_softc *sc)
+{
+    if (!sc->dp_enabled)
+        return;
+    if (sc->dp_timer == 0)
+        sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
+                                HZ / 100, plbase);
+    dp_async_tick(sc);
 }
 #endif /* DP_ASYNC_RX */
 
@@ -889,11 +904,11 @@ static void
 dp_timer_kick(struct dp_softc *sc)
 {
 #ifdef DP_ASYNC_RX
-    /* 5.3: nothing may sleep here, so hand off to the async engine - it
-     * submits one command and returns. Everything below is the portable
-     * synchronous path, which 6.5 still uses. */
+    /* 5.3: nothing may sleep here, so hand off to the async engine - it arms
+     * the next tick and submits one command, then returns. Everything below
+     * is the portable synchronous path, which 6.5 still uses. */
     sc->dp_timer = 0;
-    dp_async_tick(sc);
+    dp_async_poll(sc);
     return;
 #endif
 #ifdef DP_NO_POLL_TIMER
