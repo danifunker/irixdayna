@@ -216,18 +216,18 @@ boot_guest() {
 		ser_send "$ROOT_PW"
 		sleep 2
 	else
-		# Drive the command monitor rather than PROM option 1 ("Start
-		# System"), which boots the default /unix. autoconfig stages the
-		# new kernel as /unix.install and only a clean shutdown promotes
-		# it, so option 1 silently boots the OLD kernel - indistinguishable
-		# from "the driver never initialised". Same reasoning as 5.3 above.
-		echo ">>> booting multiuser ($_kern)"
-		ser_send "5"
-		ser_wait ">>" 30 || die "command monitor prompt not seen"
-		ser_send "boot -f dksc(0,1,8)sash"
-		ser_wait "sash" 60 || die "sash never loaded"
-		sleep 1
-		ser_send "boot -f dksc(0,1,0)$_kern"
+		# PROM option 1 boots whatever /unix is. That is correct here ONLY
+		# because the build phase shuts the guest down cleanly (see
+		# shutdown_guest), which promotes /unix.install to /unix. Do NOT
+		# "fix" this by naming /unix.install the way the 5.3 path does:
+		# 6.5's root is XFS, sash cannot replay an XFS log, and a kernel
+		# written moments earlier is still in it -
+		#     xfs: ifree bad format.
+		#     Unable to execute dksc(0,1,0)unix.install: execute format error
+		# 5.3 gets away with it because EFS has no log and its promotion
+		# never happens either way.
+		echo ">>> booting multiuser"
+		ser_send "1"
 		ser_wait_long "console login" 3 "console login prompt" || return 1
 		if [ -n "$ROOT_PW" ]; then CI -q login root --password "$ROOT_PW"
 		else CI -q login root; fi
@@ -307,6 +307,18 @@ fi
 
 ser_send "cd / && umount /mnt && sync && echo DP-'XFER'-OK"
 ser_wait "DP-XFER-OK" 90 || { echo "umount/sync failed:" >&2; tail -10 "$CONSOLE" >&2; exit 1; }
+
+# Shut the guest down properly rather than just pulling the plug. Two reasons,
+# both only visible on 6.5: it is what promotes autoconfig's /unix.install to
+# /unix (so the boot test below runs the kernel we just linked), and it
+# quiesces the XFS log (so the next boot's sash can actually read that kernel).
+if [ "$DO_BOOTTEST" = 1 ] && [ "$RELEASE" = 6.5 ]; then
+	echo ">>> shutting the guest down cleanly (promotes the new kernel)"
+	ser_send "/etc/shutdown -y -g0 -i0"
+	ser_wait "reset" 170 || ser_wait "Press any key" 30 \
+		|| echo "    (no shutdown banner seen; continuing anyway)"
+	sleep 3
+fi
 
 CI quit >/dev/null 2>&1 || true
 sleep 2
