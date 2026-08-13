@@ -1,0 +1,25 @@
+*
+* dp - DaynaPort SCSI/Link Ethernet driver (IRIX 5.3)
+*
+* Flags:
+*   c   Character device.  lboot builds a cdevsw entry from the driver
+*       prefix, so dp_open/dp_close/dp_ioctl must exist.  Ours are
+*       stubs that return ENODEV - this is a network interface reached
+*       through ifconfig, not a device special file.
+*   s   Software driver.  Required: lboot cannot probe for SCSI targets
+*       by memory reference, so without this flag it concludes the
+*       device is absent and silently drops the driver from the kernel.
+*
+* SOFT is '-' because we claim no major device number.
+*
+* DEPENDENCIES must list scsi so that the host adapter driver and the
+* scsi_info[]/scsi_alloc[]/scsi_command[]/scsi_free[] function pointer
+* arrays are present before dp_init() runs.
+*
+* Differences from the 6.5 master file (../../master.d/dp):
+*   - 6.5 uses flags "nscR"; 'R' (registerable/loadable) is meaningless
+*     on 5.3, which has no ml(1M).
+*   - 6.5 adds "+thread_class scsi", a 6.x-only directive.
+*
+*FLAG	PREFIX	SOFT	#DEV	DEPENDENCIES
+cs	dp_	-	-	scsi
