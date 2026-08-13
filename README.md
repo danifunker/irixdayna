@@ -7,7 +7,8 @@ A native IRIX kernel driver for the DaynaPort SCSI/Link Ethernet adapter
 PiSCSI.
 
 Two drivers share one protocol implementation: **IRIX 6.5** in the repository
-root, and an **IRIX 5.3** port under `irix5.3/`. The code between the
+root (tested on IP30/Octane), and an **IRIX 5.3** port under `irix5.3/`
+(tested on IP20/Indigo R4000). The code between the
 `BEGIN SHARED`/`END SHARED` markers is byte-for-byte identical in both, and
 `irix5.3/drift.sh` enforces that - a protocol fix belongs in both files.
 
@@ -43,12 +44,16 @@ The DaynaPort protocol code is shared verbatim between the two — `sh
 irix5.3/drift.sh` verifies the two files still agree, and protocol fixes belong
 in both.
 
-**Status: 5.3 moves packets under emulation, and has not yet been run on
-hardware.** In [IRIS](https://github.com/techomancer/iris) with its emulated
-DaynaPort target (`--features daynaport`), `dp0` attaches, reads its MAC from
-the device, resolves ARP, and pings the gateway 4/4 with no loss. Everything
-the emulator can exercise, it passes; a real BlueSCSI/ZuluSCSI on a real bus is
-the remaining unknown.
+**Status: working on real hardware.** Confirmed on an Indigo R4000 (IP20)
+running IRIX 5.3 with a DaynaPort-compatible target at SCSI id 3: `dp0`
+attaches and carries traffic.
+
+Before that it was brought up in [IRIS](https://github.com/techomancer/iris)
+against its emulated DaynaPort target (`--features daynaport`), where `dp0`
+attaches, reads its MAC from the device, resolves ARP, pings 4/4 with no loss
+and completes a TCP handshake — that is where all the bugs were found and
+fixed. IP22 (Indy/Indigo2) and IP12 (Indigo R3000) compile but have only been
+run under emulation and not at all, respectively.
 
 ## How to build
 
@@ -194,12 +199,13 @@ on the machine that will boot it. `--cpuboard` refuses `--autoconfig` and
 `--boot-test` for exactly this reason: the emulated guest is an IP22 and would
 otherwise link a foreign object into its own kernel.
 
-**Untested on any hardware.** IP20 and IP12 compile clean and the driver
-contains no assembly, no DMA setup and no cache maintenance of its own, so
-there is nothing obviously board-specific in it — but nobody has booted it on
-an Indigo. Build with `-DDP_CHECK_ETHERIF`: `struct etherif` comes from a
-reconstructed header, and an R3000 kernel is a different `struct ifnet` from
-the one this was checked against.
+**Per-board status.** IP20 (Indigo R4000) is confirmed on hardware. IP22 is
+verified under emulation only. IP12 (R3000) compiles and has never been
+booted. The driver contains no assembly, no DMA setup and no cache maintenance
+of its own, so there is nothing obviously board-specific in it — but build the
+first kernel on any untried board with `-DDP_CHECK_ETHERIF`: `struct etherif`
+comes from a reconstructed header, and a different kernel is a different
+`struct ifnet`. An R3000 IP12 is the least-charted of these.
 
 `smake install` also writes `/var/sysgen/system/dp.sm` containing
 `INCLUDE: dp` — 5.3 uses `INCLUDE:`, not the `USE:` that 6.5 takes. Then:

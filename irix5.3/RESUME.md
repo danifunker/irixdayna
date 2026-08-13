@@ -9,10 +9,29 @@ several obvious-looking "improvements" are wrong for reasons captured here.
 
 ## 1. State of the work
 
-**The driver moves packets on IRIX 5.3/IP22, under emulation. It has never run
-on hardware.**
+**The driver works on real hardware: an Indigo R4000 (IP20) running IRIX 5.3,
+with a DaynaPort-compatible target at SCSI id 3. `dp0` attaches and carries
+traffic.**
 
-Verified, by actually running it (2026-08-13):
+That is the milestone this file was written in anticipation of. Everything
+below about emulation still stands — it is where the bugs were found — but the
+port is no longer speculative.
+
+Reported from the hardware bring-up, worth keeping because they were install
+traps rather than driver bugs:
+
+- `INCLUDE: dp` appended to `/var/sysgen/system/irix.sm` does not take: that
+  file ships mode 444, the append fails, and nothing downstream complains. The
+  symptom is no `dp0` and an empty SYSLOG. `smake install` now writes
+  `/var/sysgen/system/dp.sm` instead, which lboot reads equally and which the
+  driver owns.
+- `nm /unix | grep dp_` is a useless check: IRIX's disk-parameter struct has
+  `dp_skew`, `dp_cyls` and friends, so it hits on any kernel. Grep `dp_init`.
+- The board matters and the names mislead: an Indigo R4000 is IP20, an Indigo
+  R3000 is IP12, an Indy is IP22. A wrong-board object does not fail to link
+  and may not crash; it just gives you no interface.
+
+Verified under emulation (2026-08-13), which is what made all of it findable:
 
 - `ping` over `dp0` to the gateway: **4 transmitted, 4 received, 0% loss**,
   48/74/119 ms. ARP resolves; `telnet` to the gateway gets a RST back
@@ -327,9 +346,11 @@ section alive rather than deleted:
   `etherif` — turned out to be wrong on 5.3 and panicked the watchdog. The
   driver no longer uses it. Assume any other layout assumption is equally
   unverified.
-- It has been checked on exactly one kernel. An IP12/R3000 build is a
-  different `struct ifnet`, hence a different `etherif`. Build the first
-  kernel on any new board with the canary.
+- It has now been checked on two kernels — 5.3/IP22 under emulation and
+  5.3/IP20 on hardware, the latter with the canary compiled in and not
+  tripping. An IP12/R3000 build is still a different `struct ifnet`, hence a
+  different `etherif`. Build the first kernel on any new board with the
+  canary.
 
 The original analysis, still worth reading:
 
