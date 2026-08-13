@@ -122,28 +122,52 @@ defines `CFLAGS` only inside `#if defined(CPUBOARD)`, so an unset value yields
 an EMPTY `CFLAGS` - no `-D_KERNEL`, no `-coff`, no R4000 errata workarounds. It
 compiles, and produces an object that will wreck the kernel.
 
-### R3000 Indigo (IP12)
+### Other boards: CPUBOARD must match `hinv`
 
-`CPUBOARD=IP12` is all it takes - the Makefile deliberately sets no ABI flags
-of its own, so `Makefile.kernio` supplies the right ones per board:
+`CPUBOARD` is the only thing that changes between boards - the Makefile
+deliberately sets no ABI flags of its own, so `Makefile.kernio` supplies the
+right ones. **Check what you actually have first**, because the names are not
+intuitive: an Indigo R4000 is IP20, an Indigo R3000 is IP12, and an Indy is
+IP22.
+
+```sh
+hinv | head -1              # e.g. "1 100 MHZ IP20 Processor"
+```
+
+| Machine | CPUBOARD |
+|---|---|
+| Indy, Indigo2 (R4000/R4400), Challenge S | `IP22` |
+| **Indigo R4000** | **`IP20`** |
+| Indigo R3000 | `IP12` |
+| Challenge / Onyx | `IP19` |
 
 ```sh
 cd irix5.3
-smake CPUBOARD=IP12
-smake CPUBOARD=IP12 install
+smake CPUBOARD=IP20             # <- your board here
+smake CPUBOARD=IP20 install
 echo 'INCLUDE: dp' >> /var/sysgen/system/irix.sm
 autoconfig -f && reboot
 ```
 
-You can check it picked up the R3000 set by looking at the compile line:
+The prebuilt objects under `dist/` are named for their board
+(`dist/irix53-ip20/`, `dist/irix53-ip22/`). Installing one built for a
+different board is not a small mistake - see the CFLAGS note below.
+
+Check the compile line to confirm `CPUBOARD` took:
 
 ```
--D_K32U32 -D_KERNEL -DSTATIC=static -DIP12 -DR3000 -Wx,-G8 -non_shared -coff -Wc,-pic0
+IP20  -D_K32U32 -D_KERNEL -DSTATIC=static -DJUMP_WAR -DPROBE_WAR -DBADVA_WAR -DIP20 -DR4000 ...
+IP22  ... same, with -DIP22
+IP12  -D_K32U32 -D_KERNEL -DSTATIC=static -DIP12 -DR3000 -Wx,-G8 -non_shared -coff -Wc,-pic0
 ```
 
-`-DR3000`, and *no* `-DJUMP_WAR -DPROBE_WAR -DBADVA_WAR` — those three are
-R4000 silicon errata workarounds and only appear for IP20/IP22. If you see an
-empty or R4000 flag set on an Indigo, stop: `CPUBOARD` did not take.
+`JUMP_WAR`/`PROBE_WAR`/`BADVA_WAR` are R4000 silicon errata workarounds: they
+appear for IP20 and IP22, and must NOT appear for an R3000 IP12. An empty
+CFLAGS means `CPUBOARD` did not take at all — stop, because that object has no
+`-D_KERNEL` and no `-coff` and will wreck the kernel.
+
+An object built for the wrong board does not fail to link and does not
+necessarily crash: the most likely symptom is simply **no `dp0`**.
 
 **Cross-building on a faster machine.** The object is o32 COFF and the flags
 come from the board, so an IP12 object can be produced on any 5.3 host - for
@@ -161,7 +185,7 @@ on the machine that will boot it. `--cpuboard` refuses `--autoconfig` and
 `--boot-test` for exactly this reason: the emulated guest is an IP22 and would
 otherwise link a foreign object into its own kernel.
 
-**Untested on IP12 hardware.** It compiles clean for R3000 and the driver
+**Untested on any hardware.** IP20 and IP12 compile clean and the driver
 contains no assembly, no DMA setup and no cache maintenance of its own, so
 there is nothing obviously board-specific in it — but nobody has booted it on
 an Indigo. Build with `-DDP_CHECK_ETHERIF`: `struct etherif` comes from a
