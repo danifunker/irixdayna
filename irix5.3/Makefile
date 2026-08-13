@@ -75,17 +75,34 @@ all: $(MODULE)
 $(MODULE): $(SRCS) sgi_ether.h
 	$(CC) $(CFLAGS) $(MYCFLAGS) -c $(SRCS) -o $(MODULE)
 
+# lboot reads every *.sm in /var/sysgen/system, so the driver gets its own
+# file rather than an appended line in irix.sm. irix.sm ships mode 444 and is
+# rewritten by OS patches; a file we own is writable, idempotent, and removed
+# by uninstall.
 install: $(MODULE)
 	cp master.d/dp /var/sysgen/master.d/dp
 	cp $(MODULE)   /var/sysgen/boot/dp.o
+	echo 'INCLUDE: dp' > /var/sysgen/system/dp.sm
 	@echo ""
-	@echo "Add the following line to /var/sysgen/system/irix.sm:"
-	@echo "  INCLUDE: dp"
+	@echo "Installed:"
+	@echo "  /var/sysgen/boot/dp.o"
+	@echo "  /var/sysgen/master.d/dp"
+	@echo "  /var/sysgen/system/dp.sm   (INCLUDE: dp)"
 	@echo ""
-	@echo "Then run:  /etc/autoconfig -f && reboot"
+	@echo "If a previous attempt appended 'INCLUDE: dp' to irix.sm, remove it"
+	@echo "now - the driver must be named once, not twice."
+	@echo ""
+	@echo "Then:  /etc/autoconfig -f"
+	@echo "Check: grep -c dp_init /var/sysgen/master.c   (expect >= 1)"
+	@echo "       grep -c dp_start /var/sysgen/master.c  (expect >= 1)"
+	@echo "Then:  /etc/shutdown -y -g0 -i6   <- promotes /unix.install"
 	@echo ""
 	@echo "Note INCLUDE: (not USE:) - 5.3 lboot calls dp_init() for"
 	@echo "INCLUDE'd drivers.  USE: is a 6.x spelling."
+
+uninstall:
+	rm -f /var/sysgen/system/dp.sm /var/sysgen/boot/dp.o /var/sysgen/master.d/dp
+	@echo "Removed. Run /etc/autoconfig -f and reboot to drop it from the kernel."
 
 # Verify the duplicated protocol code has not drifted from the 6.5 driver.
 drift:

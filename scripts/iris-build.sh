@@ -308,7 +308,15 @@ if [ "$DO_AUTOCONFIG" = 1 ]; then
 	ser_wait "DP-INST-OK" 60 || { tail -10 "$CONSOLE" >&2; exit 1; }
 	ser_send "grep -c '^INCLUDE: dp' /var/sysgen/system/irix.sm ; echo DP-'GREP'-DONE"
 	ser_wait "DP-GREP-DONE" 30 || true
-	ser_send "echo 'INCLUDE: dp' >> /var/sysgen/system/irix.sm ; echo DP-'SM'-OK"
+	# 5.3 gets its own .sm file: lboot reads every *.sm in /var/sysgen/system,
+	# and irix.sm ships read-only (mode 444), so appending to it fails silently
+	# for anyone installing by hand. 6.5 keeps the append - that is the path
+	# verified end to end there, and switching it is a separate change.
+	if [ "$RELEASE" = 5.3 ]; then
+		ser_send "echo 'INCLUDE: dp' > /var/sysgen/system/dp.sm ; echo DP-'SM'-OK"
+	else
+		ser_send "echo 'INCLUDE: dp' >> /var/sysgen/system/irix.sm ; echo DP-'SM'-OK"
+	fi
 	ser_wait "DP-SM-OK" 30 || true
 	ser_send "/etc/autoconfig -f && echo DP-'AC'-OK || echo DP-'AC'-FAIL"
 	if ! ser_wait_long "DP-AC-OK" 4 "autoconfig kernel link"; then

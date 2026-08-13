@@ -144,10 +144,19 @@ hinv | head -1              # e.g. "1 100 MHZ IP20 Processor"
 ```sh
 cd irix5.3
 smake CPUBOARD=IP20             # <- your board here
-smake CPUBOARD=IP20 install
-echo 'INCLUDE: dp' >> /var/sysgen/system/irix.sm
-autoconfig -f && reboot
+smake CPUBOARD=IP20 install     # installs dp.o, master.d/dp AND dp.sm
+/etc/autoconfig -f
+grep -c dp_start /var/sysgen/master.c   # >= 1 means lboot took it
+/etc/shutdown -y -g0 -i6                # clean: promotes /unix.install
 ```
+
+`install` writes `/var/sysgen/system/dp.sm` containing `INCLUDE: dp`. lboot
+reads every `*.sm` in that directory, so the driver gets a file of its own -
+`irix.sm` ships mode 444 and is rewritten by OS patches, and an append to it
+fails silently for anyone not checking. Shut down cleanly rather than
+resetting: `autoconfig` stages the kernel as `/unix.install` and only a clean
+shutdown renames it, so a hard reset boots the old one and looks identical to
+"the driver doesn't work".
 
 The prebuilt objects under `dist/` are named for their board
 (`dist/irix53-ip20/`, `dist/irix53-ip22/`). Installing one built for a
@@ -192,16 +201,12 @@ an Indigo. Build with `-DDP_CHECK_ETHERIF`: `struct etherif` comes from a
 reconstructed header, and an R3000 kernel is a different `struct ifnet` from
 the one this was checked against.
 
-Then add the driver to `/var/sysgen/system/irix.sm`:
-
-```
-INCLUDE: dp
-```
-
-(5.3 uses `INCLUDE:`, not the `USE:` that 6.5 takes.) Then:
+`smake install` also writes `/var/sysgen/system/dp.sm` containing
+`INCLUDE: dp` — 5.3 uses `INCLUDE:`, not the `USE:` that 6.5 takes. Then:
 
 ```sh
-autoconfig -f && reboot
+/etc/autoconfig -f
+/etc/shutdown -y -g0 -i6
 ```
 
 On the next boot `dp0` appears, and `ifconfig` works as on 6.5:
