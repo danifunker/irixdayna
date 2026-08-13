@@ -194,6 +194,15 @@ int   dp_devflag  = D_MP;
 #define NETLOG(x)
 #endif
 
+/* Per-target probe chatter. Separate from DP_LOG because the scan walks every
+ * adapter and target on the machine - 24 lines on a three-controller box -
+ * and only the match matters in normal use. */
+#ifdef DP_LOG_PROBE
+#define PROBELOG(x) cmn_err x
+#else
+#define PROBELOG(x)
+#endif
+
 /* -----------------------------------------------------------------------
  * DaynaPort SCSI command opcodes  (identical to 6.5)
  * ----------------------------------------------------------------------- */
@@ -231,6 +240,7 @@ int   dp_devflag  = D_MP;
 #define INV_ETHER_DP    43      /* DaynaPort SCSI/Link Ethernet */
 
 #define DP_TX_QLEN      8       /* max frames in TX queue               */
+#define DP_STALL_TICKS  200     /* poll ticks before declaring a command lost */
 
 /* SCSI peripheral device type we bind to: 3 == Processor */
 #define DP_SCSI_TYPE    3
@@ -300,6 +310,7 @@ struct dp_softc {
     volatile int        dp_abusy;       /* a packet command is outstanding    */
     volatile int        dp_fg;          /* a foreground command is in flight  */
     int                 dp_chain;       /* consecutive completion re-submits  */
+    int                 dp_stall;       /* ticks a command has been in flight */
 #endif
 };
 
@@ -525,8 +536,15 @@ dp_async_done(scsi_request_t *req)
         return;
     }
     sc->dp_chain = 0;
-    /* No re-arm here on purpose - see dp_async_poll(). The timer chain runs
-     * from timeout context and does not depend on this routine. */
+    sc->dp_stall = 0;
+    /* Re-arm here as well as in dp_timer_kick(). Arming from timeout context
+     * is what keeps the chain alive (see dp_async_poll); this is the belt to
+     * that pair of braces, and costs nothing when the timer is already
+     * pending - dp_async_rearm_if_idle() checks. Relying on either one alone
+     * has now failed on hardware once in each direction. */
+    if (sc->dp_enabled && sc->dp_timer == 0)
+        sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
+                                HZ / 100, plbase);
 }
 
 /* Submit if the engine is idle and no foreground command holds the device.
@@ -563,6 +581,32 @@ dp_async_poll(struct dp_softc *sc)
     if (sc->dp_timer == 0)
         sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
                                 HZ / 100, plbase);
+
+    /*
+     * Recover from a command whose completion never arrives. One request is
+     * outstanding at a time, so a lost completion leaves dp_abusy set and
+     * stops EVERYTHING - transmit as well as receive, since dp_async_tick()
+     * refuses to submit while busy. That is not hypothetical: it is what a
+     * real DaynaPort did where the emulated one never does, and the interface
+     * went completely silent in both directions.
+     *
+     * sr_timeout on the request is 10*HZ, so anything still outstanding after
+     * DP_STALL_TICKS (2s at HZ/100) is not coming back. Give up on it and
+     * carry on; a duplicate completion later is harmless, it only clears a
+     * flag we have already cleared.
+     */
+    if (sc->dp_abusy) {
+        if (++sc->dp_stall > DP_STALL_TICKS) {
+            cmn_err(CE_WARN, "dp%d: SCSI command lost (no completion in %ds)"
+                    " - recovering\n", sc->dp_unit, DP_STALL_TICKS / (HZ / 100) );
+            sc->dp_stall = 0;
+            sc->dp_atx   = NULL;
+            sc->dp_abusy = 0;
+        }
+    } else {
+        sc->dp_stall = 0;
+    }
+
     dp_async_tick(sc);
 }
 #endif /* DP_ASYNC_RX */
@@ -1398,9 +1442,12 @@ dp_probe_one(int adap, int target, int lun)
      * scsi_command[]/scsi_free[].  The table is sparsely populated;
      * SCSIDRIVER_NULL (0) marks a slot with no adapter behind it.
      */
+    /* An empty adapter slot or an empty target is the overwhelmingly common
+     * case - a machine with three controllers walks 24 of them at every boot.
+     * Say nothing for those unless DP_LOG_PROBE is asked for explicitly. */
     drvnum = scsi_driver_table[adap];
     if (drvnum == SCSIDRIVER_NULL) {
-        DPLOG((CE_NOTE, "dp: probe %d/%d/%d: no adapter (drvnum NULL)\n",
+        PROBELOG((CE_NOTE, "dp: probe %d/%d/%d: no adapter (drvnum NULL)\n",
                adap, target, lun));
         return 0;
     }
@@ -1408,7 +1455,7 @@ dp_probe_one(int adap, int target, int lun)
     /* scsi_info issues an INQUIRY; NULL means nothing is there. */
     tinfo = (*scsi_info[drvnum])((u_char)adap, (u_char)target, (u_char)lun);
     if (tinfo == NULL || tinfo->si_inq == NULL) {
-        DPLOG((CE_NOTE, "dp: probe %d/%d/%d: drvnum=%d but no target info\n",
+        PROBELOG((CE_NOTE, "dp: probe %d/%d/%d: drvnum=%d but no target info\n",
                adap, target, lun, drvnum));
         return 0;
     }
