@@ -266,7 +266,9 @@ ser_wait "DP-COPY-OK" 60 || { tail -10 "$CONSOLE" >&2; exit 1; }
 if [ "$RELEASE" = 6.5 ]; then
 	_build="smake CPUBOARD=$CPUBOARD BUILTIN=1 XCFLAGS=\"$EXTRA_CFLAGS\""
 else
-	_build="smake CPUBOARD=$CPUBOARD MYCFLAGS=\"$EXTRA_CFLAGS\""
+	# 5.3 also appends via XCFLAGS: its Makefile carries -DDP_ASYNC_RX, which
+	# a command-line MYCFLAGS= would silently drop.
+	_build="smake CPUBOARD=$CPUBOARD XCFLAGS=\"$EXTRA_CFLAGS\""
 fi
 ser_send "cd /tmp/dpb && $_build && echo DP-'BUILD'-OK || echo DP-'BUILD'-FAIL"
 if ! ser_wait_long "DP-BUILD-OK" 3 "native compile"; then

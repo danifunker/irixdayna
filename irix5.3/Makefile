@@ -46,8 +46,24 @@ include /var/sysgen/Makefile.kernio
 # size of struct ifnet, and therefore of the struct etherif we embed in the
 # softc, which is precisely the silent-corruption failure this port is most
 # exposed to. If you are targeting a kernel you KNOW was built MP, override:
-#   smake MYCFLAGS="-I. -D_MP_NETLOCKS -DMP"
-MYCFLAGS=-I.
+#   smake XCFLAGS="-D_MP_NETLOCKS -DMP"
+#
+# DP_ASYNC_RX is not optional on 5.3. Without it the RX poll issues SCSI
+# commands and sleeps in psema() from an itimeout() callback, which on this
+# release runs on the interrupt/IDLE stack - there is no context to switch
+# away from, so the sleep resumes at address 0:
+#     PANIC: exception on IDLE stack k1:0x20 epc:0x0
+# 6.5 runs timeout callbacks on a thread and does not need it. Build without
+# it only to reproduce that panic.
+ASYNC_CFLAGS=-DDP_ASYNC_RX
+
+# Extra cflags from the caller. Use this rather than MYCFLAGS= on the command
+# line: a command-line macro assignment REPLACES the Makefile's definition,
+# which would silently drop $(ASYNC_CFLAGS) above and hand you a driver that
+# panics on the first poll.
+XCFLAGS=
+
+MYCFLAGS=-I. $(ASYNC_CFLAGS) $(XCFLAGS)
 
 SRCS=if_dp.c
 MODULE=dp.o
@@ -89,7 +105,7 @@ help:
 	@echo ""
 	@echo "Variables:"
 	@echo "  CPUBOARD  IP22 (default) IP20 IP12 IP19 IP17 - MUST match hinv"
-	@echo "  MYCFLAGS  extra cflags (default -I.)"
+	@echo "  XCFLAGS   extra cflags, appended (do NOT use MYCFLAGS=)"
 	@echo ""
 	@echo "Debug:"
 	@echo "  -DDP_LOG        init/attach/enable/reset events"
@@ -101,7 +117,7 @@ help:
 	@echo "                  FIRST BOOT OF ANY NEW MACHINE"
 	@echo ""
 	@echo "Recommended first build:"
-	@echo "  smake MYCFLAGS=\"-I. -DDP_LOG -DDP_LOG_SCSI -DDP_CHECK_ETHERIF\""
+	@echo "  smake XCFLAGS=\"-DDP_LOG -DDP_LOG_SCSI -DDP_CHECK_ETHERIF\""
 	@echo ""
 	@echo "There is no load/unload target: IRIX 5.3 has no ml(1M)."
 
