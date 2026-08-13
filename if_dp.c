@@ -143,6 +143,10 @@ struct dp_softc {
     int                 dp_txq_head;        /* dequeue index (qlock)      */
     int                 dp_txq_tail;        /* enqueue index (taillock)   */
     int                 dp_txq_len;         /* current depth (both locks) */
+    /* Non-zero while a foreground (user-context) SCSI command holds dp_qlock.
+     * dp_timer_kick() checks it and skips the tick rather than blocking on
+     * the mutex from timeout context - see the comment there. */
+    volatile int        dp_fg;
 };
 
 static int              dp_nunit = 0;
@@ -237,9 +241,11 @@ dp_scsi_cmd_locked(struct dp_softc *sc, u_char *cdb, int cdblen,
                    void *buf, int buflen, ushort dir)
 {
     int status;
+    sc->dp_fg++;                /* tell the poll tick to stand off */
     mutex_lock(&sc->dp_qlock, PZERO);
     status = dp_scsi_cmd(sc, cdb, cdblen, buf, buflen, dir);
     mutex_unlock(&sc->dp_qlock);
+    sc->dp_fg--;
     return status;
 }
 
@@ -521,8 +527,38 @@ dp_runqueue(struct dp_softc *sc)
 static void
 dp_timer_kick(struct dp_softc *sc)
 {
+    /*
+     * This handle has just fired, so it is dead. Clear it before anything
+     * else: dp_runqueue() below calls untimeout(sc->dp_timer) on entry, and
+     * untimeout() on an already-fired handle corrupts the callout list. The
+     * corruption shows up later as a dispatch through a null callback -
+     *     PANIC: exception on IDLE stack k1:0x20 epc:0x0
+     * i.e. the kernel jumping to address 0 from timeout context, long after
+     * the command that provoked it has finished.
+     */
+    sc->dp_timer = 0;
+
     if (!sc->dp_enabled)
         return;
+    /*
+     * This runs from itimeout(), i.e. in timeout context. mutex_lock() there
+     * is only safe if the mutex is free: a foreground SCSI command holds
+     * dp_qlock for the duration of a command (milliseconds), and blocking on
+     * it here means sleeping in timeout context, which on IRIX 5.3 ends as
+     *
+     *     Kernel/Interrupt Stack Overflow @0x0
+     *     PANIC: stack underflow/overflow
+     *
+     * Any ifconfig/ioctl that reaches the device - set_mode from SIOCADDMULTI,
+     * for instance - is enough to trigger it once the poll is armed. So skip
+     * this tick entirely when a foreground command is in flight and come back
+     * in 10ms; there is nothing time-critical about a poll.
+     */
+    if (sc->dp_fg) {
+        sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
+                                HZ / 100, plbase);
+        return;
+    }
     mutex_lock(&sc->dp_qlock, PZERO);
     dp_runqueue(sc);
     mutex_unlock(&sc->dp_qlock);
@@ -533,7 +569,14 @@ dp_runqueue_stop(struct dp_softc *sc)
 {
     sc->dp_enabled = 0;
     mutex_lock(&sc->dp_qlock, PZERO);
-    sc->dp_timer = 0;   /* by now timer has either fired or been cancelled by runqueue */
+    /* The timer is armed far more often than not: dp_runqueue() re-arms it at
+     * the end of every poll. Dropping the handle without untimeout() leaves a
+     * callback pending that can still walk into dp_runqueue and race whatever
+     * control command asked us to stop. */
+    if (sc->dp_timer) {
+        untimeout(sc->dp_timer);
+        sc->dp_timer = 0;
+    }
     mutex_unlock(&sc->dp_qlock);
 }
 
@@ -557,6 +600,27 @@ dp_eio_init(struct etherif *eif, int flags)
     (void)flags;
 
     DPLOG((CE_NOTE, "dp%d: eio_init\n", sc->dp_unit));
+
+    /*
+     * The ether layer calls init again (and reset, below) on an interface
+     * that is already up - ifconfig up alone produces init, reset, init.
+     * Every one of those issues SCSI commands from user context, and once
+     * dp_runqueue_start() has armed the poll, they nest on top of a poll
+     * sleeping in psema ON THE INTERRUPT STACK. 5.3's is small, and the
+     * second init reliably overflows it:
+     *
+     *     Kernel/Interrupt Stack Overflow @0x0 sp:0x881aa578
+     *     PANIC: stack underflow/overflow
+     *
+     * Skipping the redundant work keeps anything from nesting. This is a
+     * containment measure, not the cure: the cure is for dp_runqueue() to
+     * stop issuing sleeping SCSI commands from an itimeout callback and run
+     * in process context instead.
+     */
+    if (sc->dp_enabled) {
+        DPLOG((CE_NOTE, "dp%d: eio_init: already up, nothing to do\n", sc->dp_unit));
+        return 0;
+    }
 
     /* Read real MAC now that we can sleep (called from ifconfig context). */
     {
@@ -595,6 +659,12 @@ dp_eio_reset(struct etherif *eif)
 
     DPLOG((CE_NOTE, "dp%d: eio_reset\n", sc->dp_unit));
 
+    /* Same nesting hazard as eio_init above. */
+    if (sc->dp_enabled) {
+        DPLOG((CE_NOTE, "dp%d: eio_reset: already up, not bouncing\n", sc->dp_unit));
+        return;
+    }
+
     dp_runqueue_stop(sc);
     dp_enable(sc, 0);
     dp_enable(sc, 1);
@@ -609,8 +679,36 @@ dp_eio_reset(struct etherif *eif)
 static void
 dp_eio_watchdog(struct ifnet *ifp)
 {
-    struct etherif *eif = ifptoeif(ifp);
-    struct dp_softc *sc = (struct dp_softc *)eif->eif_private;
+    struct dp_softc *sc = NULL;
+    int i;
+
+    /*
+     * Do NOT use ifptoeif() here. It is a raw cast that assumes the kernel's
+     * ifnet lives at offset 0 of the real struct etherif - an assumption this
+     * driver cannot verify, because ether.h is not shipped and sgi_ether.h is
+     * a reconstruction. On IRIX 5.3 the cast yields a bogus etherif, so
+     * eif_private reads as 0 and this function panics the kernel on the first
+     * watchdog tick after ifconfig up:
+     *
+     *     PANIC: KERNEL FAULT  ... `Software detected SEGV'
+     *     Bad addr: 0x0, cause: 0x10000008<CE=1,EXC=RMISS>
+     *
+     * (16 bytes into dp_eio_watchdog, per nm on the linked kernel.) The
+     * DP_CHECK_ETHERIF canary cannot catch this: it guards the bytes AFTER
+     * dp_eif, not the offsets of members inside it.
+     *
+     * Matching ifp against the interfaces we attached needs no layout
+     * assumption at all, and an unrecognised ifp is simply ignored rather
+     * than dereferenced.
+     */
+    for (i = 0; i < DP_MAXUNITS; i++) {
+        if (dp_units[i] != NULL && eiftoifp(&dp_units[i]->dp_eif) == ifp) {
+            sc = dp_units[i];
+            break;
+        }
+    }
+    if (sc == NULL)
+        return;
 
     if (sc->dp_enabled)
         ifp->if_timer = IFNET_SLOWHZ;
