@@ -9,20 +9,28 @@ several obvious-looking "improvements" are wrong for reasons captured here.
 
 ## 1. State of the work
 
-**The 5.3 port has never been compiled and never been run.** It has not been
-near an IRIX machine. Everything in `irix5.3/` is written against SGI's *IRIX
-5.3 Device Driver Programming Guide* (007-0911-050), not against real headers.
+**The driver compiles and links into a working kernel on IRIX 5.3/IP22. It has
+never moved a packet.**
 
-What is genuinely verified:
+Verified, by actually running it:
 
+- Compiles clean with SGI's own `cc` and the exact IP22 kernel CFLAGS, inside
+  an emulated Indy (`scripts/iris-build.sh --release 5.3`).
+- `autoconfig -f` links a real kernel with the driver in it — every symbol
+  resolves (`--autoconfig`).
+- lboot accepts `master.d/dp`: the generated `/var/sysgen/master.c` carries
+  `dp_init` in the boot init table and `dp_open`/`dp_close`/`dp_ioctl` in the
+  cdevsw entry. That settles the master-file flags question.
 - The drift checker works in both directions (tested by perturbing `dp_do_rx`
   and confirming it produces a diff, then restoring).
 - 501 lines are byte-identical between `irix5.3/if_dp.c` and `../if_dp.c`.
 - The 6.5 driver is untouched — `git diff main -- if_dp.c Makefile master.d/`
   is empty.
 
-What is **not** verified: that any of it compiles, links, boots, or moves a
-packet. Assume nothing.
+**Not** verified: that it moves a packet, or that `struct etherif` is right.
+IRIS has no DaynaPort SCSI target, so `dp_do_attach()` — and therefore
+`ether_attach()` and the `DP_CHECK_ETHERIF` canary — is never reached. A green
+pipeline run is not "it works".
 
 ### Repo layout
 
@@ -78,9 +86,13 @@ hand-writing `if_output` with `ip_arpresolve` across `AF_INET` / `AF_UNSPEC` /
 management — roughly 250 lines of intricate pointer arithmetic that cannot be
 tested without hardware. `ether_attach` provides all of it.
 
-The trade: `sgi_ether.h` becomes a reconstruction, which is now the port's
-single largest risk. See §5.1. If `ether_attach` turns out not to exist in the
-5.3 kernel, this decision has to be revisited and the port gets much bigger.
+**`ether_attach` is confirmed to exist** in a stock 5.3 IP22 `/unix`, along
+with `ether_input`, `ether_stop` and `ether_selfsnoop` — which is what
+validated this decision. (`ether_detach`/`ether_reattach` are absent, as
+expected: they exist only for 6.x loadable drivers.)
+
+The trade: `sgi_ether.h` is still a reconstruction, and its *layout* remains
+the port's single largest risk. See §5.1.
 
 ### 2.3 The 6.5 API shim
 
@@ -92,21 +104,30 @@ primitives rather than scattering `#ifdef`s through the protocol code:
 | `mutex_lock(m, pri)` | `psema(m, pri)` |
 | `mutex_unlock(m)` | `vsema(m)` |
 | `mutex_trylock(m)` | `cpsema(m)` |
-| `mutex_init(m, type, name)` | `initnsema(m, 1, name)` |
+| `mutex_init(m, type, name)` | `initnsema_mutex(m, name)` |
 | `mutex_destroy(m)` | `freesema(m)` |
 | `init_sema(s, v, name, unit)` | `initnsema(s, v, name)` |
+| `SN_MORETOCOME` | 0 — does not exist on 5.3 |
 
 The signatures line up almost exactly, which is *why* 501 lines can stay
 byte-identical — including all five `etherif` handlers, which a naive port
 would have had to fork.
 
-Two subtleties that were fixed and should not be undone:
+Three subtleties, all confirmed against the real headers, none of which should
+be undone:
 
-- There is **no `typedef sema_t mutex_t`**. 5.3 may define its own `mutex_t`
-  and a typedef would collide. The softc declares `sema_t` directly.
-- Each macro is preceded by `#undef`. If 5.3's `sys/sema.h` provides any of
-  these names as a macro or prototype, ours must win without a redefinition
-  diagnostic.
+- There is **no `typedef sema_t mutex_t`**. 5.3 spells the Sun-compat alias
+  `kmutex_t`, not `mutex_t`. The softc declares `sema_t` directly.
+- `#undef mutex_init` is **load-bearing, not defensive.** `sys/sema.h` really
+  does define it, with a different four-argument shape
+  `mutex_init(m, nm, f, i)` — name second, not third. Without the `#undef` the
+  6.5-style three-argument call expands wrongly.
+  (`mutex_lock`/`mutex_unlock`/`mutex_trylock` are *not* defined by 5.3 — it
+  uses `mutex_enter`/`mutex_exit` — so those `#undef`s are belt-and-braces.)
+- `SN_MORETOCOME` does not exist on 5.3; `net/raw.h` has only `SN_PROMISC`,
+  `SN_ERROR`, `SN_TRAILER` and the `SNERR_*` codes. It is an advisory batching
+  hint OR'd into the snoopheader, so 0 is the right equivalent — we lose an
+  optimisation on multi-packet READs and nothing else.
 
 ### 2.4 The shared-region contract
 
@@ -127,12 +148,37 @@ shared region and document why.
 
 ## 3. How to build
 
-### 3.1 You cannot build this on the Mac
+### 3.0 The fast path: build it in the emulator
+
+```sh
+scripts/iris-build.sh --release 5.3              # compile
+scripts/iris-build.sh --release 5.3 --autoconfig # + link a kernel
+scripts/iris-build.sh --release 5.3 --boot-test  # + boot it
+```
+
+This compiles the driver natively inside an emulated Indy and drops
+`dist/dp-irix53.o` on the host. It is adapted from the identical pipeline in
+`../irixscsitb` and shares its disk images via `ci/local.conf` (this repo's
+copy, else `../irixscsitb/ci/local.conf`). Needs `iris` + `iris-ci` built at
+`../iris`, `rb-cli`, and an installed 5.3 image with the dev tools.
+
+The boot disk is never written: `ci/*.toml` set `overlay = true`, so guest
+writes land in `<image>.chd.diff.chd`. `--fresh` deletes that and starts from
+pristine — always use it when a previous run left a broken kernel behind.
+
+`--release 6.5` builds the root 6.5 driver the same way, which is how you check
+that a shared-region change did not regress it.
+
+Use this for every iteration. Only go to real hardware for what it cannot do:
+packet flow.
+
+### 3.1 You cannot build this on the Mac directly
 
 There is no practical cross-toolchain. IRIX 5.3 kernel objects need o32 COFF
-from SGI's own `cc`; GCC's `mips-sgi-irix5` target cannot produce a usable
-`-coff` kernel object, and the kernel headers are not redistributable. Build
-natively.
+from SGI's own `cc` with board-specific flags; GCC's `mips-sgi-irix5` target
+cannot produce a usable `-coff` kernel object, and a mismatched kernel object
+does not fail to link, it corrupts the kernel. Build natively — in the
+emulator (§3.0) or on the machine itself.
 
 ### 3.2 On a real IRIX 5.3 machine
 
@@ -177,7 +223,7 @@ calls `dp_init()` for `INCLUDE`'d drivers. Getting this wrong means the driver
 is compiled into the kernel but never initialised, which looks exactly like
 "the device wasn't found".
 
-### 3.3 Under emulation
+### 3.4 Under emulation (manual)
 
 MAME emulates the Indy (IP22) well enough to run IRIX 5.3, and it is a
 legitimate way to shake out compile and boot failures without risking real
@@ -185,7 +231,7 @@ hardware or waiting on reboots. It is slow but the debug loop is no worse than
 the real machine's, and snapshots let you recover from an unbootable kernel
 instantly — which matters a lot here (§4.2). QEMU does not do SGI.
 
-### 3.4 Keep a known-good kernel
+### 3.5 Keep a known-good kernel
 
 Before the first `autoconfig`, save a bootable fallback:
 
@@ -267,42 +313,40 @@ If `ether_attach` is absent from the kernel symbol table, §2.2 has to be
 revisited and the port becomes substantially larger. That is the one finding
 that would justify rethinking the whole approach.
 
-### 5.2 `cpsema()` return sense
+### 5.2 `cpsema()` return sense — RESOLVED
 
-`mutex_trylock` maps to `cpsema`, used in exactly one place —
-`dp_eio_transmit`'s opportunistic queue kick. It must return non-zero **only**
-when the lock was actually taken.
+`mutex_trylock` maps to `cpsema`, which must return non-zero **only** when the
+lock was taken. `sys/sema.h` settles it: on a uniprocessor build it aliases
 
-The 5.3 manual describes the failure case as "semaphore count is already less
-than 0". For a mutex initialised to 1, the would-block case is count `<= 0`,
-so the manual's wording is either imprecise or describes different semantics
-than assumed. If `cpsema` has the other sense, `dp_eio_transmit` re-enters
-`dp_runqueue` concurrently and corrupts the TX ring — expect random panics
-under load rather than a clean failure.
+    #define apcpsema(x)  1
 
-Check `sys/sema.h`. **If in any doubt, build with `-DDP_NO_TRYLOCK`.** That
-disables the kick entirely; it is a latency optimisation only, and the 10 ms
-poll timer still drains the ring. Slightly slower, zero correctness risk. This
-is the right default until someone has read the header.
+i.e. "conditional acquire always succeeds", which only type-checks as a success
+indicator if non-zero means acquired. The mapping is correct.
 
-### 5.3 Everything else
+`-DDP_NO_TRYLOCK` remains available if the TX ring is ever suspected: it
+disables the transmit-side queue kick, a latency optimisation only — the 10 ms
+poll timer still drains the ring.
 
-| Item | Where | If wrong |
-|---|---|---|
-| `kmem_zalloc` flags | shim + `dp_do_attach` | `KM_SLEEP` is a 6.x spelling; 5.3 may want `0` for sleep and `VM_NOSLEEP` for the opposite. Likely a compile error — cheap to find. |
-| `plbase` | `dp_runqueue`, 4th arg to `itimeout` | Compile error. `#define plbase 0` is the substitute. |
-| `toid_t`, `itimeout`, `untimeout` | softc, `dp_runqueue` | Compile error. `int` substitutes for `toid_t`. |
-| `m_vget` | `dp_do_rx` | Compile/link error. It is an SGI extension; if absent, `m_get` + cluster attach is the fallback and `dp_do_rx` leaves the shared region. |
-| `scsi_driver_table` sentinel | `dp_probe_one` | Assumed 0 means "no adapter". If a real `SCSIDRIVER_*` constant is 0 on your platform, valid adapters get skipped — symptom is "no DaynaPort found" with a device that is definitely present. |
-| master.d flags `cs` | `master.d/dp` | lboot rejects the file, or drops the driver. Check `master(4)` and `/var/sysgen/master.c`. |
-| `sprintf` in kernel | MAC/log formatting | Link error. |
-| `//` comments | — | The 5.3 compiler is pre-C99. The file currently uses only `/* */`. Keep it that way; `grep '//' irix5.3/if_dp.c` should find nothing outside block comments. |
+### 5.3 Everything else — RESOLVED
 
-A compile or link error here is the **good** outcome: it names the wrong
-assumption precisely. The dangerous items are §5.1 and §5.2, which fail
-silently.
+All settled by pulling headers and `/unix` straight out of the 5.3 disk image
+with `rb-cli` (no booting needed — `rb-cli get "$IMG@1" /usr/include/sys/x.h`),
+then confirmed by an actual compile and kernel link:
 
----
+| Item | Finding |
+|---|---|
+| `kmem_zalloc` flags | `KM_SLEEP` is 0 (`sys/kmem.h`); `VM_DIRECT` 0x0100 and `VM_CACHEALIGN` 0x0800 (`sys/immu.h`). All native. |
+| `plbase`, `itimeout`, `untimeout`, `toid_t` | All in `sys/ddi.h`. `toid_t itimeout(void (*)(), void *, long, pl_t, ...)`. |
+| `m_vget` | `extern struct mbuf *m_vget(int, int, int)` in `sys/mbuf.h`. |
+| `scsi_driver_table` sentinel | `SCSIDRIVER_NULL` is 0; the code now uses the constant. |
+| `D_MP` | In `sys/conf.h` — 5.3 needs that include explicitly; 6.5 gets it via another path. |
+| `SN_MORETOCOME` | **Does not exist on 5.3.** Shimmed to 0; see §2.3. |
+| master.d flags `cs` | **Accepted by lboot** — the generated `master.c` has `dp_init` in the init table and `dp_open`/`dp_close`/`dp_ioctl` in cdevsw. |
+| `CPUBOARD` | **Mandatory.** `Makefile.kernio` defines `CFLAGS` only inside `#if defined(CPUBOARD)`; unset gives an EMPTY `CFLAGS` — no `-D_KERNEL`, no `-coff` — which compiles and produces an object that would wreck the kernel. |
+| `-D_MP_NETLOCKS -DMP` | **Do not set.** `Makefile.kernio` passes them for no board, so a stock kernel is not built that way, and setting them changes `struct ifnet`'s size — hence `struct etherif`'s — which is precisely §5.1's failure mode. |
+
+Every kernel symbol the driver references was confirmed present in the 5.3
+`/unix`, and then proven by a successful `autoconfig -f` link.
 
 ## 6. Failure-mode triage
 

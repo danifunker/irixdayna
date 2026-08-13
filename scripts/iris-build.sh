@@ -28,6 +28,11 @@
 #                      undefined ether_attach/m_vget/itimeout fails HERE, which
 #                      is exactly what you want to know. Uses the disposable
 #                      overlay, so the boot image is untouched either way.
+#   --boot-test        Also reboots into the kernel it just linked and waits
+#                      for dp_init()'s banner. Proves the driver survives lboot
+#                      and that its bus scan does not panic. Does NOT reach
+#                      ether_attach() (no DaynaPort to match), so the
+#                      DP_CHECK_ETHERIF canary stays unexercised.
 #   NOT TESTED         Actual packet flow. IRIS emulates Indy hardware; it has
 #                      no DaynaPort SCSI target, so nothing answers the vendor
 #                      CDBs. Functional testing needs either real hardware with
@@ -46,7 +51,7 @@
 # Usage:
 #   scripts/iris-build.sh --release 5.3 [--image PATH] [--iris-dir ../iris]
 #       [--config ci/iris-irix53.toml] [--rb-cli rb-cli] [--outdir dist]
-#       [--workdir DIR] [--fresh] [--autoconfig] [--cflags "..."]
+#       [--workdir DIR] [--fresh] [--autoconfig] [--boot-test] [--cflags "..."]
 #
 # Boot disk resolution (first match wins):
 #   1. --image PATH
@@ -67,6 +72,7 @@ OUTDIR="$REPO/dist"
 WORKDIR=""
 FRESH=0
 DO_AUTOCONFIG=0
+DO_BOOTTEST=0
 EXTRA_CFLAGS="-I. -DDP_LOG -DDP_LOG_SCSI -DDP_CHECK_ETHERIF"
 ROOT_PW="${IRIX_ROOT_PASSWORD:-}"
 
@@ -84,6 +90,7 @@ while [ $# -gt 0 ]; do
 		--cflags)     EXTRA_CFLAGS="$2"; shift 2 ;;
 		--fresh)      FRESH=1; shift ;;
 		--autoconfig) DO_AUTOCONFIG=1; shift ;;
+		--boot-test)  DO_AUTOCONFIG=1; DO_BOOTTEST=1; shift ;;
 		-h|--help)    sed -n '2,60p' "$0"; exit 0 ;;
 		*)            die "unknown option: $1" ;;
 	esac
@@ -180,39 +187,48 @@ if [ "$FRESH" = 1 ]; then
 	rm -f "${IMAGE}.diff.chd" "${IMAGE}.overlay" "${IMAGE}.overlay.dirty"
 fi
 
-echo ">>> launching IRIS (headless, boot=$IMAGE, work=$HDA)"
-( cd "$WORKDIR" && "$IRIS" --ci --config "$CONFIG" --ci-socket "$SOCK" \
-	--scsi1 "$IMAGE" --scsi2 "$HDA" --serial-log "$CONSOLE" \
-	> "$WORKDIR/iris.log" 2>&1 & echo $! > "$WORKDIR/iris.pid" )
+launch_iris() {
+	echo ">>> launching IRIS (headless, boot=$IMAGE, work=$HDA)"
+	( cd "$WORKDIR" && "$IRIS" --ci --config "$CONFIG" --ci-socket "$SOCK" \
+		--scsi1 "$IMAGE" --scsi2 "$HDA" --serial-log "$CONSOLE" \
+		> "$WORKDIR/iris.log" 2>&1 & echo $! > "$WORKDIR/iris.pid" )
+	_i=0
+	until CI ping >/dev/null 2>&1; do
+		_i=$((_i+1)); [ "$_i" -lt 30 ] || die "iris control socket never came up (see $WORKDIR/iris.log)"
+		sleep 1
+	done
+}
 
-i=0
-until CI ping >/dev/null 2>&1; do
-	i=$((i+1)); [ "$i" -lt 30 ] || die "iris control socket never came up (see $WORKDIR/iris.log)"
-	sleep 1
-done
+# boot_guest — PROM menu through to a usable root shell.
+boot_guest() {
+	_kern="${1:-unix}"
+	CI start
+	ser_wait "Option?" 90 || die "PROM menu never appeared (see $CONSOLE)"
+	if [ "$RELEASE" = 5.3 ]; then
+		echo ">>> booting single-user (command monitor -> sash -> unix initstate=s)"
+		ser_send "5"
+		ser_wait ">>" 30 || die "command monitor prompt not seen"
+		ser_send "boot -f dksc(0,1,8)sash"
+		ser_wait "sash" 60 || die "sash never loaded"
+		sleep 1
+		ser_send "boot -f dksc(0,1,0)$_kern initstate=s"
+		ser_wait_long "Single User Mode" 2 "single-user prompt" || return 1
+		ser_send "$ROOT_PW"
+		sleep 2
+	else
+		echo ">>> booting multiuser"
+		ser_send "1"
+		ser_wait_long "console login" 3 "console login prompt" || return 1
+		if [ -n "$ROOT_PW" ]; then CI -q login root --password "$ROOT_PW"
+		else CI -q login root; fi
+	fi
+	return 0
+}
+
+launch_iris
 
 # ---- 4. boot ---------------------------------------------------------------
-CI start
-ser_wait "Option?" 90 || die "PROM menu never appeared (see $CONSOLE)"
-
-if [ "$RELEASE" = 5.3 ]; then
-	echo ">>> booting single-user (command monitor -> sash -> unix initstate=s)"
-	ser_send "5"
-	ser_wait ">>" 30 || die "command monitor prompt not seen"
-	ser_send "boot -f dksc(0,1,8)sash"
-	ser_wait "sash" 60 || die "sash never loaded"
-	sleep 1
-	ser_send "boot -f dksc(0,1,0)unix initstate=s"
-	ser_wait_long "Single User Mode" 2 "single-user prompt" || exit 1
-	ser_send "$ROOT_PW"
-	sleep 2
-else
-	echo ">>> booting multiuser"
-	ser_send "1"
-	ser_wait_long "console login" 3 "console login prompt" || exit 1
-	if [ -n "$ROOT_PW" ]; then CI -q login root --password "$ROOT_PW"
-	else CI -q login root; fi
-fi
+boot_guest || exit 1
 
 # ---- 5. mount work disk and compile ----------------------------------------
 # Guest lines are csh-AND-sh clean (`;` `&&` `||` `( )` only — no `$?`, no
@@ -258,6 +274,11 @@ if [ "$DO_AUTOCONFIG" = 1 ]; then
 	fi
 	ser_send "cp /var/sysgen/master.c /mnt/out/master.c ; echo DP-'MC'-OK"
 	ser_wait "DP-MC-OK" 60 || true
+	# autoconfig stages the new kernel as /unix.install; the promotion to
+	# /unix happens during a clean shutdown, which a PROM-driven boot skips.
+	# Log what is actually there so a failed boot test is diagnosable.
+	ser_send "ls -l /unix /unix.install ; echo DP-'LS'-DONE"
+	ser_wait "DP-LS-DONE" 30 || true
 fi
 
 ser_send "cd / && umount /mnt && sync && echo DP-'XFER'-OK"
@@ -265,6 +286,56 @@ ser_wait "DP-XFER-OK" 90 || { echo "umount/sync failed:" >&2; tail -10 "$CONSOLE
 
 CI quit >/dev/null 2>&1 || true
 sleep 2
+kill "$(cat "$WORKDIR/iris.pid" 2>/dev/null)" 2>/dev/null || true
+rm -f "$SOCK"
+sleep 1
+
+# ---- 5c. optional: boot the kernel we just linked ---------------------------
+# The new /unix lives in the copy-on-write overlay, so relaunching WITHOUT
+# --fresh boots it. This proves the driver survives lboot AND that dp_init()
+# runs its bus scan without panicking against a real (emulated) WD33C93.
+#
+# It does NOT exercise ether_attach(), and therefore not the DP_CHECK_ETHERIF
+# canary: ether_attach is only reached from dp_do_attach(), which only runs
+# when the INQUIRY match finds a DaynaPort. IRIS has no such target, so the
+# scan correctly finds nothing. The struct etherif question stays open until
+# this runs against real hardware or an emulated DaynaPort.
+if [ "$DO_BOOTTEST" = 1 ]; then
+	# Boot /unix.install directly: autoconfig stages the new kernel there and
+	# only a clean shutdown renames it to /unix. Driving the PROM ourselves
+	# skips that, so booting "unix" would silently boot the OLD kernel — which
+	# looks exactly like "the driver never initialised".
+	echo ">>> rebooting into the newly linked kernel (/unix.install)"
+	launch_iris
+	if ! boot_guest unix.install; then
+		echo "iris-build: THE NEW KERNEL DID NOT BOOT." >&2
+		echo "            The driver panics or hangs at init. Console tail:" >&2
+		tail -40 "$CONSOLE" >&2
+		echo "            (the pristine image is untouched; --fresh resets the overlay)" >&2
+		exit 1
+	fi
+	echo ">>> kernel booted; checking for the driver banner"
+	if ser_wait "DaynaPort SCSI/Link driver" 20; then
+		echo ">>> dp_init() ran."
+	else
+		# The banner is printed during boot, so it may already have scrolled
+		# past the wait window; fall back to grepping the console log.
+		if grep -q "DaynaPort SCSI/Link driver" "$CONSOLE"; then
+			echo ">>> dp_init() ran (found in console log)."
+		else
+			echo "iris-build: kernel booted but dp_init() never announced itself." >&2
+			echo "            Check 'INCLUDE: dp' and the master.d flags." >&2
+			exit 1
+		fi
+	fi
+	if grep -q "LAYOUT MISMATCH" "$CONSOLE"; then
+		echo "iris-build: DP_CHECK_ETHERIF CANARY TRIPPED - sgi_ether.h is wrong." >&2
+		grep -A6 "LAYOUT MISMATCH" "$CONSOLE" >&2
+		exit 1
+	fi
+	CI quit >/dev/null 2>&1 || true
+	sleep 2
+fi
 
 # ---- 6. pull the object back -----------------------------------------------
 echo ">>> extracting $OBJ from the work disk"
