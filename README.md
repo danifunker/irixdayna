@@ -25,6 +25,21 @@ Architecture-independent: no DMA, no PCI, no cache flush required.
 
 Requires IRIX 6.5. Tested on IP30 (Octane).
 
+### IRIX 5.3
+
+An IRIX 5.3 port lives in [`irix5.3/`](irix5.3/) — Indy, Indigo2, Challenge S
+(IP22), Indigo (IP20/IP12) and Challenge/Onyx (IP19/IP21). 5.3 has no hwgraph,
+no CDL, no loadable modules and is o32-only, so it needs its own copy of the
+driver rather than a build flag; see [`irix5.3/README.md`](irix5.3/README.md).
+
+The DaynaPort protocol code is shared verbatim between the two — `sh
+irix5.3/drift.sh` verifies the two files still agree, and protocol fixes belong
+in both.
+
+**The 5.3 port has not yet been run on hardware.** Design rationale, the
+pre-boot verification checklist and failure-mode triage are in
+[`irix5.3/RESUME.md`](irix5.3/RESUME.md).
+
 ## How to build
 
 Requires smake and the IRIX kernel build environment (`/var/sysgen`).
