@@ -1,3 +1,4 @@
 shared/ci/local.conf
 dist/
 *.o
+.DS_Store
