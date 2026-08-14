@@ -672,6 +672,47 @@ dp_async_poll(struct dp_softc *sc)
 
     dp_async_tick(sc);
 }
+
+/* IRIX 5.3's if_slowtimo calls if_watchdog in the old BSD style -
+ * (*if_watchdog)(unit) - not with the ifp the etherifops signature
+ * expects. ether_attach() wires the etherifops watchdog straight into the
+ * ifnet, so dp_eio_watchdog() was being reached with unit 0 cast to a
+ * pointer: its ifp-matching loop could never match, it could never re-arm
+ * if_timer, and so it ran exactly once per ifconfig and went silent.
+ * (The ifptoeif() cast it replaced panicked on the same near-zero value -
+ * "Bad addr: 0x0" - which this finally explains.) Measured under IRIS:
+ * the watchdog argument arrives as 0x0 while the attached ifp is a real
+ * kernel pointer.
+ *
+ * So on 5.3 dp_do_attach() installs this unit-style watchdog over the one
+ * ether_attach() wired. It only re-arms the timer (and carries the
+ * DP_LOG_TICKRATE probe); it deliberately does NOT kick the packet
+ * engine - a watchdog that collects packets masks a dead poll chain.
+ * The shared dp_eio_watchdog() remains for 6.5, whose ifnet layer really
+ * does pass the ifp. */
+static void
+dp_wdog53(int unit)
+{
+    struct dp_softc *sc;
+    struct ifnet *ifp;
+
+    if (unit < 0 || unit >= DP_MAXUNITS)
+        return;
+    sc = dp_units[unit];
+    if (sc == NULL || !sc->dp_enabled)
+        return;
+    ifp = eiftoifp(&sc->dp_eif);
+    ifp->if_timer = IFNET_SLOWHZ;
+#ifdef DP_LOG_TICKRATE
+    cmn_err(CE_NOTE, "dp%d: 1s tick=%u sub=%u done=%u rx=%u"
+            " busy=%d fg=%d stall=%d\n", sc->dp_unit,
+            sc->dp_ntick, sc->dp_nsub, sc->dp_ndone,
+            (uint)ifp->if_ipackets - sc->dp_nrx,
+            sc->dp_abusy, sc->dp_fg, sc->dp_stall);
+    sc->dp_ntick = sc->dp_nsub = sc->dp_ndone = 0;
+    sc->dp_nrx   = (uint)ifp->if_ipackets;
+#endif
+}
 #endif /* DP_ASYNC_RX */
 
 /* =======================================================================
@@ -1508,6 +1549,14 @@ dp_do_attach(int adap, int target, int lun, int drvnum)
             break;
         }
     }
+#endif
+
+#ifdef DP_ASYNC_RX
+    /* 5.3's if_slowtimo calls if_watchdog as (*wd)(unit), not (*wd)(ifp),
+     * so the etherifops watchdog ether_attach() just wired can neither
+     * find its softc nor re-arm if_timer. Install the unit-style one -
+     * see dp_wdog53() for the whole story. */
+    eiftoifp(&sc->dp_eif)->if_watchdog = (void (*)())dp_wdog53;
 #endif
 
     cmn_err(CE_NOTE, "dp%d: DaynaPort SCSI/Link at scsi(%d) target %d lun %d\n",
