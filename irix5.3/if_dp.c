@@ -508,6 +508,7 @@ dp_async_done(scsi_request_t *req)
     struct dp_softc *sc = (struct dp_softc *)req->sr_dev;
     struct ifnet *ifp = eiftoifp(&sc->dp_eif);
     int more = 0;
+    int s;
 
 #ifdef DP_LOG_TICKRATE
     sc->dp_ndone++;
@@ -538,37 +539,70 @@ dp_async_done(scsi_request_t *req)
         }
     }
 
-    sc->dp_abusy = 0;
-
     /* Chain straight into the next command while the device says there is
      * more, but bound it: a completion routine calling submit calling a
-     * completion is fine once, less so a thousand times deep. */
+     * completion is fine once, less so a thousand times deep. dp_abusy
+     * stays SET across the chain: clearing it first (as this used to)
+     * opens a window where the transmit path can claim the engine and
+     * double-submit the shared request. */
     if (more && !sc->dp_fg && sc->dp_enabled && ++sc->dp_chain < 8) {
         dp_async_submit(sc);
         return;
     }
     sc->dp_chain = 0;
     sc->dp_stall = 0;
-    /* Re-arm here as well as in dp_timer_kick(). Arming from timeout context
-     * is what keeps the chain alive (see dp_async_poll); this is the belt to
-     * that pair of braces, and costs nothing when the timer is already
-     * pending - dp_async_rearm_if_idle() checks. Relying on either one alone
-     * has now failed on hardware once in each direction. */
+    /* Release the engine and re-arm the poll in ONE atomic step.
+     *
+     * This runs at completion (interrupt) priority, but dp_async_poll()
+     * performs the same dp_timer test-and-set from timeout context, which
+     * a completion CAN interrupt between its test and its store. Two arms
+     * both reading dp_timer == 0 each start a poll chain; every callout
+     * re-arms itself, so the orphaned chain never dies, each extra chain
+     * multiplies the odds of the next race, and the callout table fills:
+     *     PANIC: Timeout table overflow.
+     * Reproduced under IRIS with zero-latency completions (three pings).
+     * splhi() blocks the interrupt across the peer's window, making the
+     * two test-and-sets atomic with respect to each other.
+     *
+     * Re-arming here as well as in dp_async_poll() stays deliberate:
+     * relying on either site alone has failed on hardware once in each
+     * direction. The guard makes the redundancy safe. */
+    s = splhi();
+    sc->dp_abusy = 0;
     if (sc->dp_enabled && sc->dp_timer == 0)
         sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
                                 HZ / 100, plbase);
+    splx(s);
 }
 
 /* Submit if the engine is idle and no foreground command holds the device.
  * Never arms anything: callers that need the poll to continue go through
- * dp_async_poll() below. Safe from any context. */
+ * dp_async_poll() below. Safe from any context.
+ *
+ * The idle test and the claim of the engine must be one atomic step. This
+ * is reached from user context (every transmit enqueue) and from timeout
+ * context (dp_async_poll), and one can preempt the other between the test
+ * and dp_async_submit()'s dp_abusy = 1 - a window dozens of instructions
+ * wide, since submit bzero()s and rebuilds the shared request first. Two
+ * entrants both passing the test double-submit the single dp_areq, and the
+ * second bzero lands on a request the host adapter is actively
+ * transferring - the data phase stops dead mid-transfer (seen from the
+ * BlueSCSI side as a 5 s "finishRead timeout" followed by the firmware
+ * abandoning the command). splhi() closes the window. */
 static void
 dp_async_tick(struct dp_softc *sc)
 {
+    int s;
+
     if (!sc->dp_enabled)
         return;
-    if (sc->dp_abusy || sc->dp_fg)
+    s = splhi();
+    if (sc->dp_abusy || sc->dp_fg) {
+        splx(s);
         return;
+    }
+    sc->dp_abusy = 1;   /* claim the engine before dropping splhi */
+    splx(s);
     sc->dp_chain = 0;
     dp_async_submit(sc);
 }
@@ -588,8 +622,21 @@ dp_async_tick(struct dp_softc *sc)
 static void
 dp_async_poll(struct dp_softc *sc)
 {
+    int s;
+    int lost = 0;
+
     if (!sc->dp_enabled)
         return;
+
+    /* The test-and-set on dp_timer must be atomic against the identical
+     * one at the end of dp_async_done(): a completion interrupt landing
+     * between this test and this store arms a second self-rearming chain
+     * and the orphans multiply into "PANIC: Timeout table overflow" - see
+     * the comment in dp_async_done(). The stall bookkeeping shares the
+     * region because its recovery writes dp_abusy, which a concurrent
+     * completion also writes; recovering at the same instant a late
+     * completion chains a new command would mark a live engine idle. */
+    s = splhi();
     if (sc->dp_timer == 0)
         sc->dp_timer = itimeout((void (*)())dp_timer_kick, (void *)sc,
                                 HZ / 100, plbase);
@@ -609,15 +656,19 @@ dp_async_poll(struct dp_softc *sc)
      */
     if (sc->dp_abusy) {
         if (++sc->dp_stall > DP_STALL_TICKS) {
-            cmn_err(CE_WARN, "dp%d: SCSI command lost (no completion in %ds)"
-                    " - recovering\n", sc->dp_unit, DP_STALL_TICKS / (HZ / 100) );
             sc->dp_stall = 0;
             sc->dp_atx   = NULL;
             sc->dp_abusy = 0;
+            lost = 1;
         }
     } else {
         sc->dp_stall = 0;
     }
+    splx(s);
+
+    if (lost)
+        cmn_err(CE_WARN, "dp%d: SCSI command lost (no completion in %ds)"
+                " - recovering\n", sc->dp_unit, DP_STALL_TICKS / (HZ / 100) );
 
     dp_async_tick(sc);
 }
