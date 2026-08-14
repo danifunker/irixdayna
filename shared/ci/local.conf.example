@@ -1,11 +1,12 @@
-# ci/local.conf.example — per-machine paths for scripts/iris-build.sh.
+# shared/ci/local.conf.example — per-machine paths for
+# shared/scripts/iris-build.sh.
 #
-#   cp ci/local.conf.example ci/local.conf && $EDITOR ci/local.conf
+#   cp shared/ci/local.conf.example shared/ci/local.conf && $EDITOR shared/ci/local.conf
 #
-# The real ci/local.conf is .gitignore'd. Parsed as KEY=VALUE, never sourced.
-# Precedence: command-line flag > environment variable > this file.
+# The real shared/ci/local.conf is .gitignore'd. Parsed as KEY=VALUE, never
+# sourced. Precedence: command-line flag > environment variable > this file.
 #
-# If this file is absent, scripts/iris-build.sh falls back to
+# If this file is absent, shared/scripts/iris-build.sh falls back to
 # ../irixscsitb/ci/local.conf — the same two disk images serve both projects,
 # so there is no need to duplicate them.
 

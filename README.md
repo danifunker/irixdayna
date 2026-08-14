@@ -6,11 +6,22 @@ A native IRIX kernel driver for the DaynaPort SCSI/Link Ethernet adapter
 (DP0801/DP0802) and compatible emulators including ZuluSCSI, BlueSCSI V2,
 PiSCSI.
 
-Two drivers share one protocol implementation: **IRIX 6.5** in the repository
-root (tested on IP30/Octane), and an **IRIX 5.3** port under `irix5.3/`
+Two drivers share one protocol implementation: **IRIX 6.5** under `irix6.5/`
+(tested on IP30/Octane), and an **IRIX 5.3** port under `irix5.3/`
 (tested on IP20/Indigo R4000). The code between the
 `BEGIN SHARED`/`END SHARED` markers is byte-for-byte identical in both, and
 `irix5.3/drift.sh` enforces that - a protocol fix belongs in both files.
+
+Repository layout:
+
+- `irix6.5/` — the 6.5 driver: `if_dp.c`, `Makefile`, `master.d/dp`,
+  `sgi_ether.h`, plus its emulator configs under `ci/`
+- `irix5.3/` — the 5.3 port: same shape, plus `installer/` (the CD install
+  scripts) and `docs/` (5.3 work notes)
+- `shared/` — everything both use: `scripts/` (emulator build, acceptance
+  ladder, CD mastering), `ci/local.conf.example`, and protocol/architecture
+  docs under `docs/`
+- `dist/` — build output (gitignored), written by the scripts
 
 The DaynaPort SCSI/Link is a SCSI-attached Ethernet adapter that was originally
 sold for vintage Macs. It presents as a SCSI type-3 (Processor) device and
@@ -60,6 +71,8 @@ run under emulation and not at all, respectively.
 Requires smake and the IRIX kernel build environment (`/var/sysgen`).
 
 ```sh
+cd irix6.5
+
 # Build for Octane (default)
 smake CPUBOARD=IP30
 
@@ -188,7 +201,7 @@ come from the board, so an IP12 object can be produced on any 5.3 host - for
 instance inside the emulator, which is far faster than an Indigo:
 
 ```sh
-scripts/iris-build.sh --release 5.3 --cpuboard IP12 \
+shared/scripts/iris-build.sh --release 5.3 --cpuboard IP12 \
     --cflags "-DDP_LOG -DDP_CHECK_ETHERIF"
 # -> dist/dp-irix53.o, built with -DIP12 -DR3000
 ```

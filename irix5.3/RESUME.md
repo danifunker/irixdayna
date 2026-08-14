@@ -52,7 +52,7 @@ Verified under emulation (2026-08-13), which is what made all of it findable:
 What made this testable: `docs/iris-daynaport-target.md` was implemented. IRIS
 now emulates a DaynaPort SCSI/Link target (`--features daynaport`,
 `kind = "daynaport"` on any `[scsi.N]`), so the whole ladder runs headless -
-`scripts/dp-ladder.sh --release 5.3` drives it. The emulator side needed no
+`shared/scripts/dp-ladder.sh --release 5.3` drives it. The emulator side needed no
 corrections at all; every bug the ladder found was in this driver.
 
 Four of them, all invisible until something finally answered an INQUIRY:
@@ -87,10 +87,12 @@ Section 5's remaining unknowns are timing, sustained multi-packet READ, and
 ### Repo layout
 
 ```
-if_dp.c            6.5 driver — DO NOT EDIT for 5.3 reasons
-Makefile           6.5
-master.d/dp        6.5
-sgi_ether.h        6.5 (revision 1.15, has INET6)
+irix6.5/
+  if_dp.c          6.5 driver — DO NOT EDIT for 5.3 reasons
+  Makefile         6.5
+  master.d/dp      6.5
+  sgi_ether.h      6.5 (revision 1.15, has INET6)
+  ci/              6.5 emulator configs
 irix5.3/
   if_dp.c          5.3 driver, ~1090 lines
   sgi_ether.h      5.3 reconstruction (INET6 member removed)
@@ -99,6 +101,13 @@ irix5.3/
   drift.sh         shared-region checker
   README.md        build + install + pre-boot checklist
   RESUME.md        this file
+  ci/              5.3 emulator configs
+  installer/       CD install/uninstall scripts
+  docs/            5.3 work notes (attach/poll fixes, dated RESUME notes)
+shared/
+  scripts/         iris-build.sh, dp-ladder.sh, mk-dp-cd.sh
+  ci/              local.conf.example (the real local.conf is gitignored)
+  docs/            protocol/architecture docs
 ```
 
 ### Git / PR state
@@ -123,10 +132,13 @@ of the 6.5 driver is shareable, the rest is discovery/attach/locking/module
 plumbing with no counterpart across releases. Abstracting ~600 divergent lines
 to save ~500 shared ones would be more `#ifdef` than code.
 
-The 6.5 tree deliberately stays at the repo root rather than moving to
-`irix6.5/`. This makes the PR touch zero existing files except `README.md`,
-which matters because upstream is mid-development and a relocation would
-conflict with whatever they are editing.
+The 6.5 tree originally stayed at the repo root rather than moving to
+`irix6.5/`, so the PR would touch zero existing files except `README.md` —
+upstream was mid-development and a relocation would conflict with whatever
+they were editing. **Reversed 2026-08-14, with upstream's agreement**: the
+developer okayed the reorganisation, and the 6.5 driver now lives in
+`irix6.5/`, release-specific files in `irix5.3/` and `irix6.5/`, and
+everything common under `shared/`.
 
 ### 2.2 `etherif`, not raw `ifnet`
 
@@ -184,7 +196,7 @@ be undone:
 ### 2.4 The shared-region contract
 
 `drift.sh` extracts the region between the `BEGIN SHARED` / `END SHARED`
-markers and diffs it against the corresponding region of `../if_dp.c`. Both
+markers and diffs it against the corresponding region of `../irix6.5/if_dp.c`. Both
 extractions anchor on the same text (`/* dp_scsi_cmd_locked`), so the 6.5 file
 needs no markers of its own — that is deliberate, to keep the PR from touching
 it.
@@ -203,14 +215,14 @@ shared region and document why.
 ### 3.0 The fast path: build it in the emulator
 
 ```sh
-scripts/iris-build.sh --release 5.3              # compile
-scripts/iris-build.sh --release 5.3 --autoconfig # + link a kernel
-scripts/iris-build.sh --release 5.3 --boot-test  # + boot it
+shared/scripts/iris-build.sh --release 5.3              # compile
+shared/scripts/iris-build.sh --release 5.3 --autoconfig # + link a kernel
+shared/scripts/iris-build.sh --release 5.3 --boot-test  # + boot it
 ```
 
 This compiles the driver natively inside an emulated Indy and drops
 `dist/dp-irix53.o` on the host. It is adapted from the identical pipeline in
-`../irixscsitb` and shares its disk images via `ci/local.conf` (this repo's
+`../irixscsitb` and shares its disk images via `shared/ci/local.conf` (this repo's
 copy, else `../irixscsitb/ci/local.conf`). Needs `iris` + `iris-ci` built at
 `../iris`, `rb-cli`, and an installed 5.3 image with the dev tools.
 
@@ -427,7 +439,7 @@ Every kernel symbol the driver references was confirmed present in the 5.3
 | lboot drops the driver, no error | master file flags, or missing `s` (software) flag — lboot cannot probe SCSI and concludes absent | `grep dp_ /var/sysgen/master.c` |
 | Kernel builds, panics during boot | `dp_init()` running before the SCSI subsystem is ready, or `scsi_driver_table[]` indexed out of range | `boot /unix.works`; narrow the `SCSI_SGISTART` range |
 | Boots fine, no `dp0`, no messages | `USE:` used instead of `INCLUDE:` — `dp_init()` never called | Fix `irix.sm`, re-`autoconfig` |
-| `autoconfig` succeeded but the booted kernel has no driver | You booted `/unix`, the OLD kernel. `autoconfig` only **stages** the new one as `/unix.install`; the rename happens during a clean shutdown | Reboot cleanly (`shutdown`/`init 6`), or boot `/unix.install` explicitly from the PROM. This bit the emulator boot test — see `scripts/iris-build.sh` |
+| `autoconfig` succeeded but the booted kernel has no driver | You booted `/unix`, the OLD kernel. `autoconfig` only **stages** the new one as `/unix.install`; the rename happens during a clean shutdown | Reboot cleanly (`shutdown`/`init 6`), or boot `/unix.install` explicitly from the PROM. This bit the emulator boot test — see `shared/scripts/iris-build.sh` |
 | `multiply defined _irix5_mips4` from `ng1.a` during autoconfig | Pre-existing on stock 5.3 images, unrelated to this driver | Ignore; `autoconfig` still succeeds |
 | Boots, `dp_init` runs, no device found | INQUIRY match failing, or adapter range wrong, or `drvnum == 0` sentinel wrong | `-DDP_LOG` prints every type-3 device's vendor/product; compare against `"Dayna"` / `"SCSI/Link"` |
 | `dp0` exists, `ifconfig up` hangs forever | `psema(&sc->dp_sema)` never woken — `sr_notify` not called | `-DDP_LOG_SCSI`; check `scsi_command[]` index and that `sr_notify` is non-NULL (5.3 rejects NULL) |

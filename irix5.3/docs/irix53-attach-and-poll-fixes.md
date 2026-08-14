@@ -36,7 +36,7 @@ kind = "daynaport"            # optional: mac = "...", subnet = "192.168.10.0/24
 ```
 
 It runs its own NAT gateway on 192.168.10.0/24 (gateway `.1`, guest `.2`),
-separate from `ec0`'s. See `../iris/docs/daynaport.md`. `scsi dayna` on the IRIS
+separate from `ec0`'s. See `docs/daynaport.md` in the IRIS repo. `scsi dayna` on the IRIS
 monitor console (telnet 127.0.0.1:8888) shows its MAC, addresses and counters.
 
 So the driver can now be exercised past `dp_init()` for the first time. Doing
@@ -46,7 +46,7 @@ simply unreachable while nothing ever answered the INQUIRY.
 ## 2. What already works (don't re-litigate these)
 
 Run with a DaynaPort at target 3, IRIX 5.3 booted single-user from a kernel
-linked by `scripts/iris-build.sh --release 5.3 --boot-test`:
+linked by `shared/scripts/iris-build.sh --release 5.3 --boot-test`:
 
 - IRIX's own SCSI scan sees the target and types it correctly —
   `hinv` prints `Processor: unit 3 on SCSI controller 0`.
@@ -220,8 +220,8 @@ lines and every hunk is quoted above.
 ## 6. How to verify
 
 ```sh
-scripts/iris-build.sh --release 5.3 --boot-test --fresh \
-    --config <a copy of ci/iris-irix53.toml with a [scsi.3] daynaport target>
+shared/scripts/iris-build.sh --release 5.3 --boot-test --fresh \
+    --config <a copy of irix5.3/ci/iris-irix53.toml with a [scsi.3] daynaport target>
 ```
 
 Rung 1 is the `dp0: DaynaPort SCSI/Link at scsi(0) target 3 lun 0` line, and
@@ -241,5 +241,5 @@ bytes; if nothing resolves, suspect byte order in the record header or broadcast
 being filtered. `-DDP_LOG_NET` plus IRIS's `eth_summary()` traces gives both
 ends of every frame.
 
-The boot disk is never written — `ci/*.toml` set `overlay = true`, so guest
+The boot disk is never written — the iris `*.toml` configs set `overlay = true`, so guest
 writes land in `<image>.chd.diff.chd`; `--fresh` resets it.

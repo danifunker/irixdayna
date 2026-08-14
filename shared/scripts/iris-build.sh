@@ -4,14 +4,14 @@
 # assembled by rb-cli on the host and attached to the guest as a second SCSI
 # drive. No networking is needed in the guest: no DHCP, no NVRAM eaddr, no NFS.
 #
-# Adapted from the same pipeline in ../irixscsitb; the conventions (ci/*.toml,
-# ci/local.conf, work-disk transfer, serial-driven PROM boot) are deliberately
-# identical so the two repos stay familiar to each other.
+# Adapted from the same pipeline in ../irixscsitb; the conventions (iris
+# *.toml configs, a local.conf, work-disk transfer, serial-driven PROM boot)
+# are deliberately identical so the two repos stay familiar to each other.
 #
 #   --release 5.3   IRIX 5.3 guest, builds irix5.3/dp.o (o32/coff, IP22).
 #                   Boots SINGLE-USER via sash — no rc2 services to hang a
 #                   headless boot.
-#   --release 6.5   IRIX 6.5 guest, builds the root dp.o. Boots MULTIUSER.
+#   --release 6.5   IRIX 6.5 guest, builds irix6.5/dp.o. Boots MULTIUSER.
 #
 # WHY NATIVE, NOT CROSS: this is a kernel object. It must be compiled with the
 # exact CFLAGS the target kernel was built with — on 5.3 those come from
@@ -49,8 +49,8 @@
 #   - rb-cli with `new hd sgi-efs --from-dir`.
 #
 # Usage:
-#   scripts/iris-build.sh --release 5.3 [--image PATH] [--iris-dir ../iris]
-#       [--config ci/iris-irix53.toml] [--rb-cli rb-cli] [--outdir dist]
+#   shared/scripts/iris-build.sh --release 5.3 [--image PATH] [--iris-dir ../iris]
+#       [--config irix5.3/ci/iris-irix53.toml] [--rb-cli rb-cli] [--outdir dist]
 #       [--workdir DIR] [--fresh] [--autoconfig] [--boot-test] [--cflags "..."]
 #       [--cpuboard IP12]
 #
@@ -61,12 +61,13 @@
 # Boot disk resolution (first match wins):
 #   1. --image PATH
 #   2. $IRIX53_IMAGE / $IRIX65_IMAGE
-#   3. ci/local.conf (KEY=VALUE, parsed not sourced) — copy local.conf.example
-#      If this repo has no ci/local.conf, ../irixscsitb/ci/local.conf is used
-#      as a fallback, since the same two disk images serve both projects.
+#   3. shared/ci/local.conf (KEY=VALUE, parsed not sourced) — copy
+#      local.conf.example. If this repo has no shared/ci/local.conf,
+#      ../irixscsitb/ci/local.conf is used as a fallback, since the same two
+#      disk images serve both projects.
 set -eu
 
-REPO=$(cd "$(dirname "$0")/.." && pwd)
+REPO=$(cd "$(dirname "$0")/../.." && pwd)
 
 RELEASE=""
 IMAGE=""
@@ -104,7 +105,7 @@ while [ $# -gt 0 ]; do
 done
 
 # ---- config file (this repo, else the irixscsitb one) ----------------------
-CONF="$REPO/ci/local.conf"
+CONF="$REPO/shared/ci/local.conf"
 [ -f "$CONF" ] || CONF="$REPO/../irixscsitb/ci/local.conf"
 conf_get() {
 	[ -f "$CONF" ] || return 0
@@ -113,11 +114,11 @@ conf_get() {
 
 case "$RELEASE" in
 	5.3|53) RELEASE=5.3; IMG_KEY=IRIX53_IMAGE
-	        : "${CONFIG:=$REPO/ci/iris-irix53.toml}"
+	        : "${CONFIG:=$REPO/irix5.3/ci/iris-irix53.toml}"
 	        SRCDIR="$REPO/irix5.3"; OBJ=dp-irix53.o; CPUBOARD=IP22 ;;
 	6.5|65) RELEASE=6.5; IMG_KEY=IRIX65_IMAGE
-	        : "${CONFIG:=$REPO/ci/iris-irix65.toml}"
-	        SRCDIR="$REPO";        OBJ=dp-irix65.o; CPUBOARD=IP22 ;;
+	        : "${CONFIG:=$REPO/irix6.5/ci/iris-irix65.toml}"
+	        SRCDIR="$REPO/irix6.5"; OBJ=dp-irix65.o; CPUBOARD=IP22 ;;
 	*)      die "--release must be 5.3 or 6.5" ;;
 esac
 

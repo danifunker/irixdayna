@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # drift.sh - verify that the shared region of irix5.3/if_dp.c is still
-# byte-for-byte identical to the corresponding region of ../if_dp.c.
+# byte-for-byte identical to the corresponding region of ../irix6.5/if_dp.c.
 #
 # The two drivers deliberately duplicate the DaynaPort protocol code
 # (RX multi-packet parser, TX ring, runqueue, CDB builders and the
@@ -17,7 +17,7 @@ set -e
 
 here=`dirname "$0"`
 new="$here/if_dp.c"
-old="$here/../if_dp.c"
+old="$here/../irix6.5/if_dp.c"
 
 for f in "$new" "$old"; do
     if [ ! -f "$f" ]; then
@@ -55,7 +55,7 @@ if diff -u "$tmp_old" "$tmp_new" > /dev/null 2>&1; then
     exit 0
 fi
 
-echo "drift: DIVERGED - ../if_dp.c and irix5.3/if_dp.c no longer agree." >&2
+echo "drift: DIVERGED - irix6.5/if_dp.c and irix5.3/if_dp.c no longer agree." >&2
 echo "       (-) 6.5   (+) 5.3" >&2
 echo >&2
 diff -u "$tmp_old" "$tmp_new" >&2 || true

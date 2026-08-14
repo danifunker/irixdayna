@@ -1,10 +1,10 @@
 # irixdayna — IRIX 5.3 port
 
 IRIX 5.3 build of the DaynaPort SCSI/Link Ethernet driver. The 6.5 driver
-lives in the parent directory and is unchanged by this port.
+lives in `../irix6.5/` and is unchanged by this port.
 
 > **Status: compiles clean on IRIX 5.3/IP22; not yet run on hardware.** The
-> driver is built and verified by `scripts/iris-build.sh`, which compiles it
+> driver is built and verified by `shared/scripts/iris-build.sh`, which compiles it
 > natively inside an emulated Indy. Every API question from the first draft has
 > been settled against real 5.3 headers — see
 > [Before first boot](#before-first-boot) — except the `struct etherif` layout,
@@ -28,7 +28,7 @@ The board is selected by `CPUBOARD`, which picks the CFLAGS set out of
 [§4](#4-cpuboard-is-mandatory).
 
 For Octane (IP30), O2 (IP32), Fuel (IP35) or anything else running 6.5, use the
-driver in the parent directory. IP26/IP28 need 6.2 or later, so they also use
+driver in `../irix6.5/`. IP26/IP28 need 6.2 or later, so they also use
 the 6.5 build.
 
 ## Build and install
@@ -43,8 +43,8 @@ smake install
 Or build it on the host, inside the emulator, without touching a real machine:
 
 ```sh
-scripts/iris-build.sh --release 5.3               # compile only
-scripts/iris-build.sh --release 5.3 --autoconfig  # + link a real kernel
+shared/scripts/iris-build.sh --release 5.3               # compile only
+shared/scripts/iris-build.sh --release 5.3 --autoconfig  # + link a real kernel
 ```
 
 Then add to `/var/sysgen/system/irix.sm`:
@@ -112,7 +112,7 @@ are not defined by 5.3 at all — it uses `mutex_enter`/`mutex_exit`.
 
 ### Why the protocol code is duplicated
 
-`if_dp.c` here is a near-copy of `../if_dp.c`. That is deliberate. Only about a
+`if_dp.c` here is a near-copy of `../irix6.5/if_dp.c`. That is deliberate. Only about a
 third of the 6.5 driver is genuinely shareable — the rest is discovery, attach,
 locking and module plumbing that has no counterpart across the two releases.
 A compat layer abstracting ~600 divergent lines to save ~500 shared ones would
@@ -125,7 +125,7 @@ smake drift      # or: sh drift.sh
 ```
 
 This extracts the region between the `BEGIN SHARED` / `END SHARED` markers and
-diffs it against the corresponding region of `../if_dp.c`. It is currently
+diffs it against the corresponding region of `../irix6.5/if_dp.c`. It is currently
 **501 lines, byte-identical**, and covers `dp_do_rx`, `dp_do_tx`,
 `dp_runqueue`, the CDB builders and all five `etherif` handlers.
 

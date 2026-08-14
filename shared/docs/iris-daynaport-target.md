@@ -295,14 +295,14 @@ This is the part that makes the task tractable: **a complete, independent
 implementation of the other end already exists and is already automated.**
 
 Clone `github.com/danifunker/irixdayna` (branch `irix-53`) next to `iris`. It
-ships `scripts/iris-build.sh`, which compiles the IRIX driver natively inside
+ships `shared/scripts/iris-build.sh`, which compiles the IRIX driver natively inside
 IRIS, links a kernel with it, and boots it — all headless, driven over the
 serial console. It already passes through the boot stage; the DaynaPort target
 is the only thing standing between it and a working interface.
 
 ```sh
 cd ../irixdayna
-scripts/iris-build.sh --release 5.3 --boot-test
+shared/scripts/iris-build.sh --release 5.3 --boot-test
 ```
 
 ### Acceptance ladder
@@ -337,7 +337,7 @@ from the IRIX side — that plus IRIS's own `eth_summary()` gives you both ends
 of every frame.
 
 Also worth doing: the **6.5** driver is the more mature one and uses the same
-protocol. `scripts/iris-build.sh --release 6.5` builds it, so once the target
+protocol. `shared/scripts/iris-build.sh --release 6.5` builds it, so once the target
 works you can validate against both IRIX releases.
 
 ---

@@ -1,8 +1,8 @@
-# ci/iris-irix65.toml — IRIS machine config for the headless CI build of the
+# irix6.5/ci/iris-irix65-dayna.toml — IRIS machine config for the headless CI build of the
 # n32/mips3 (IRIX 6.x-only, faster) binaries.
 #
 # Boots an ALREADY-INSTALLED IRIX 6.5 system disk (validated with 6.5.22 on
-# an emulated Indy/IP22). scripts/iris-build.sh overrides the disk paths
+# an emulated Indy/IP22). shared/scripts/iris-build.sh overrides the disk paths
 # (--scsi1 boot disk, --scsi2 work disk), boots MULTIUSER — the 6.5 rc set
 # comes up clean headless, unlike some 5.3 third-party services — logs in as
 # root on the serial console, runs `make irix-n32` (+ the GUI, non-fatally),
@@ -32,7 +32,11 @@ path    = "irix65.chd"
 cdrom   = false
 overlay = true
 
-# The work disk (see ci/iris-irix53.toml for the full story).
+# The work disk (see irix5.3/ci/iris-irix53.toml for the full story).
 [scsi.2]
 path  = "work.hda"
 cdrom = false
+
+# DaynaPort SCSI/Link target under test (iris --features daynaport).
+[scsi.3]
+kind = "daynaport"

@@ -1,7 +1,7 @@
-# ci/iris-irix53.toml — IRIS machine config for the headless CI build of the
+# irix5.3/ci/iris-irix53.toml — IRIS machine config for the headless CI build of the
 # o32 (IRIX 5.3, runs 5.3-6.5) binaries.
 #
-# Boots an ALREADY-INSTALLED IRIX 5.3 system disk. scripts/iris-build.sh
+# Boots an ALREADY-INSTALLED IRIX 5.3 system disk. shared/scripts/iris-build.sh
 # overrides the disk paths on the command line (--scsi1 boot disk, --scsi2
 # work disk), boots SINGLE-USER over the serial console, builds with the
 # native MIPSpro cc, and pulls the binaries back off the work disk with
@@ -54,8 +54,3 @@ cdrom = false
 #   the NAT subnet; mount inside IRIX with `mount 192.168.0.1:/ /mnt`):
 #[nfs]
 #shared_dir = "./ci-share"
-
-# DaynaPort SCSI/Link target under test (iris --features daynaport).
-# Its own NAT gateway on 192.168.10.0/24, separate from ec0's 192.168.0.0/24.
-[scsi.3]
-kind = "daynaport"

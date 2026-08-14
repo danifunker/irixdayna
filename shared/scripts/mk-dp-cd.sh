@@ -3,15 +3,15 @@
 # network yet: drop it on a BlueSCSI/ZuluSCSI SD card as a CD image, mount it
 # on the target and run install.sh.
 #
-#   scripts/mk-dp-cd.sh [--out dist/dp-irix53.iso] [--rb-cli rb-cli]
+#   shared/scripts/mk-dp-cd.sh [--out dist/dp-irix53.iso] [--rb-cli rb-cli]
 #
 # Expects the per-board objects to exist already:
 #   dist/irix53-ip20/dp.o    dist/irix53-ip22/dp.o
 # Build them with:
-#   scripts/iris-build.sh --release 5.3 --cpuboard IP20 \
+#   shared/scripts/iris-build.sh --release 5.3 --cpuboard IP20 \
 #       --cflags "-DDP_LOG -DDP_CHECK_ETHERIF" --outdir dist/irix53-ip20
 set -eu
-REPO=$(cd "$(dirname "$0")/.." && pwd)
+REPO=$(cd "$(dirname "$0")/../.." && pwd)
 OUT="$REPO/dist/dp-irix53.iso"
 RB=rb-cli
 while [ $# -gt 0 ]; do
@@ -38,9 +38,9 @@ done
 # characters in a place nobody looks: 6.5 uses flags "nscR" plus a
 # +thread_class directive, neither of which 5.3's lboot can parse, and
 # installing it makes autoconfig fail with parse errors.
-cp "$REPO/irix5.3/master.d/dp"        "$STAGE/dp/master.d-dp"
-cp "$REPO/installer/irix53/install.sh"   "$STAGE/dp/install.sh"
-cp "$REPO/installer/irix53/uninstall.sh" "$STAGE/dp/uninstall.sh"
+cp "$REPO/irix5.3/master.d/dp"           "$STAGE/dp/master.d-dp"
+cp "$REPO/irix5.3/installer/install.sh"   "$STAGE/dp/install.sh"
+cp "$REPO/irix5.3/installer/uninstall.sh" "$STAGE/dp/uninstall.sh"
 cp "$REPO/dist/irix53-ip20/INSTALL.txt"  "$STAGE/dp/README.txt" 2>/dev/null || true
 chmod +x "$STAGE/dp/install.sh" "$STAGE/dp/uninstall.sh"
 

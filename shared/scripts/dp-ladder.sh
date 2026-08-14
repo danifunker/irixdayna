@@ -1,6 +1,6 @@
 #!/bin/sh
 # Walk the DaynaPort acceptance ladder inside IRIS: bring dp0 up and prove
-# packets actually move. Picks up where scripts/iris-build.sh leaves off —
+# packets actually move. Picks up where shared/scripts/iris-build.sh leaves off —
 # that one compiles, links and boots a kernel; this one exercises the driver.
 #
 #   1 detected   dp0 attaches (INQUIRY + the type-3 dispatch)
@@ -12,23 +12,24 @@
 #
 # Requires an IRIS built with --features daynaport (and chd, for .chd disks):
 #     cd ../iris && cargo build --release --features lightning,chd,daynaport
-# and a DaynaPort target in the machine config — ci/iris-irix{53,65}-dayna.toml
-# are ci/iris-irix{53,65}.toml plus:
+# and a DaynaPort target in the machine config — the per-release
+# irix{5.3,6.5}/ci/iris-irix{53,65}-dayna.toml are the plain
+# iris-irix{53,65}.toml plus:
 #     [scsi.3]
 #     kind = "daynaport"
 #
-# RUN scripts/iris-build.sh --release <rel> --boot-test FIRST. This script boots
-# the kernel that produced, and does not build anything itself.
+# RUN shared/scripts/iris-build.sh --release <rel> --boot-test FIRST. This
+# script boots the kernel that produced, and does not build anything itself.
 #
 # Usage:
-#   scripts/dp-ladder.sh --release 6.5 [--image PATH] [--config PATH]
+#   shared/scripts/dp-ladder.sh --release 6.5 [--image PATH] [--config PATH]
 #       [--iris-dir ../iris] [--work-hda PATH] [--ip 192.168.10.2]
 #
 # Config resolution matches iris-build.sh: flag > $IRIX{53,65}_IMAGE >
-# ci/local.conf (falling back to ../irixscsitb/ci/local.conf).
+# shared/ci/local.conf (falling back to ../irixscsitb/ci/local.conf).
 set -eu
 
-REPO=$(cd "$(dirname "$0")/.." && pwd)
+REPO=$(cd "$(dirname "$0")/../.." && pwd)
 
 RELEASE=""
 IMAGE=""
@@ -55,7 +56,7 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-CONF="$REPO/ci/local.conf"
+CONF="$REPO/shared/ci/local.conf"
 [ -f "$CONF" ] || CONF="$REPO/../irixscsitb/ci/local.conf"
 conf_get() {
 	[ -f "$CONF" ] || return 0
@@ -64,9 +65,9 @@ conf_get() {
 
 case "$RELEASE" in
 	5.3|53) RELEASE=5.3; IMG_KEY=IRIX53_IMAGE
-	        : "${CONFIG:=$REPO/ci/iris-irix53-dayna.toml}" ;;
+	        : "${CONFIG:=$REPO/irix5.3/ci/iris-irix53-dayna.toml}" ;;
 	6.5|65) RELEASE=6.5; IMG_KEY=IRIX65_IMAGE
-	        : "${CONFIG:=$REPO/ci/iris-irix65-dayna.toml}" ;;
+	        : "${CONFIG:=$REPO/irix6.5/ci/iris-irix65-dayna.toml}" ;;
 	*)      die "--release must be 5.3 or 6.5" ;;
 esac
 

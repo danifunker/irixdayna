@@ -2,14 +2,14 @@
  * if_dp.c - DaynaPort SCSI/Link Ethernet driver for IRIX 5.3
  *
  * This is the IRIX 5.3 (o32, 32-bit) port of the IRIX 6.5 driver in
- * ../if_dp.c.  The DaynaPort protocol, the RX multi-packet parser, the
+ * ../irix6.5/if_dp.c.  The DaynaPort protocol, the RX multi-packet parser, the
  * TX ring and the ifnet/etherif handlers are IDENTICAL to the 6.5
  * driver; only device discovery, SCSI submission and the kernel
  * locking primitives differ.
  *
  * To keep the two files honest, the region between the
  *   "BEGIN SHARED" / "END SHARED" markers below is byte-for-byte
- * identical to the corresponding region of ../if_dp.c.  Run
+ * identical to the corresponding region of ../irix6.5/if_dp.c.  Run
  *   ./drift.sh
  * (or "smake drift") to verify.  Fix protocol bugs in BOTH files.
  *
@@ -612,7 +612,7 @@ dp_async_poll(struct dp_softc *sc)
 #endif /* DP_ASYNC_RX */
 
 /* =======================================================================
- * BEGIN SHARED WITH ../if_dp.c
+ * BEGIN SHARED WITH ../irix6.5/if_dp.c
  *
  * Everything from here to "END SHARED" is byte-for-byte identical to the
  * 6.5 driver.  Do not edit one copy without editing the other; run

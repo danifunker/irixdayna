@@ -124,17 +124,17 @@ the emulator first. Treat a green ladder as "not obviously broken", never as
 ```sh
 # build + boot test (5.3), then walk the ladder
 cd ~/repos/irixdayna
-./scripts/iris-build.sh --release 5.3 --boot-test --fresh \
+./shared/scripts/iris-build.sh --release 5.3 --boot-test --fresh \
     --cflags "-DDP_LOG -DDP_CHECK_ETHERIF" \
-    --config /Users/dani/repos/irixdayna/ci/iris-irix53-dayna.toml \
+    --config /Users/dani/repos/irixdayna/irix5.3/ci/iris-irix53-dayna.toml \
     --workdir /tmp/dpX --outdir /tmp/distX
-./scripts/dp-ladder.sh --release 5.3 \
-    --config /Users/dani/repos/irixdayna/ci/iris-irix53-dayna.toml \
+./shared/scripts/dp-ladder.sh --release 5.3 \
+    --config /Users/dani/repos/irixdayna/irix5.3/ci/iris-irix53-dayna.toml \
     --work-hda /tmp/dpX/work.hda
 
 # hardware kit: objects per board + an EFS CD to mount on the target
-./scripts/mk-dp-cd.sh --rb-cli /Users/dani/bin/rb-cli     # -> dist/dp-irix53.iso
-./scripts/iris-build.sh --release 5.3 --cpuboard IP20 ... # cross-build a board
+./shared/scripts/mk-dp-cd.sh --rb-cli /Users/dani/bin/rb-cli     # -> dist/dp-irix53.iso
+./shared/scripts/iris-build.sh --release 5.3 --cpuboard IP20 ... # cross-build a board
 ```
 
 Gotchas that have each cost a cycle:
@@ -145,9 +145,9 @@ Gotchas that have each cost a cycle:
   `[scsi.3]` block. Zero latency is unlike any hardware.
 - **Never edit `/var/sysgen/system/irix.sm`** — mode 444, appends fail
   silently. `smake install` writes `/var/sysgen/system/dp.sm` instead.
-- **The 5.3 master file is `irix5.3/master.d/dp`**, not the 6.5 one in the repo
-  root. The 6.5 file (`nscR`, `+thread_class`) makes 5.3's `autoconfig` fail
-  with parse errors.
+- **The 5.3 master file is `irix5.3/master.d/dp`**, not the 6.5 one in
+  `irix6.5/master.d/dp`. The 6.5 file (`nscR`, `+thread_class`) makes 5.3's
+  `autoconfig` fail with parse errors.
 - **Shut the guest down cleanly** (`/etc/shutdown -y -g0 -i6`); `autoconfig`
   stages `/unix.install` and only a clean shutdown promotes it. A hard reset
   boots the old kernel and looks exactly like a broken driver.
