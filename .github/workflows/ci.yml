@@ -112,10 +112,13 @@ jobs:
             --outdir "$PWD/out"
           echo "=== built object ==="; ls -l out/
 
-      - name: Upload driver object
+      # This is the single IP22 boot-CHECK object (built with debug flags to
+      # boot-test), not a release build. Releases (all boards, quiet flags,
+      # inst tardists) come from the separate Release workflow.
+      - name: Upload boot-check object
         if: steps.gate.outputs.on == 'true'
         uses: actions/upload-artifact@v6
         with:
-          name: dp-irix${{ matrix.release }}-o
+          name: dp-irix${{ matrix.release }}-bootcheck
           path: out/*.o
           if-no-files-found: error
