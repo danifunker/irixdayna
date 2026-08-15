@@ -1,0 +1,121 @@
+name: CI — build & boot-test the driver
+
+# Builds the DaynaPort driver NATIVELY inside the IRIS emulator, on a real
+# installed IRIX disk, and boots the linked kernel to prove dp_init() runs.
+# One matrix leg per OS: 5.3 (o32) and 6.5 (n32).
+#
+# ---------------------------------------------------------------------------
+# CONFIG  (Settings > Secrets and variables > Actions)
+#
+# The IRIX boot disks are licensed installs you host as GitHub release assets.
+# Give CI their download URLs as two secrets. Both disks have a blank root
+# password. That is the whole setup:
+#
+#   Secrets:
+#     IRIX53_DISK_URL   download URL for the 5.3 boot .chd (a release asset's
+#                       download link, e.g.
+#                       https://github.com/OWNER/REPO/releases/download/TAG/irix53.chd
+#                       — a bare .chd or a .zip containing one). Public release.
+#     IRIX65_DISK_URL   same for the 6.5 boot .chd.
+#
+#   Variables (all optional):
+#     BUILD_53 / BUILD_65   set 'false' to skip an OS leg (e.g. only have 5.3).
+#     IRIS_VARIANT          iris CPU build to fetch [r4400].
+#     IRIS_TAG              iris release tag [latest].
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, irix-53 ]
+    paths:
+      - "irix5.3/**"
+      - "irix6.5/**"
+      - "shared/**"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ["5.3", "6.5"]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}            # for the iris/rb-cli release downloads
+      IRIX53_DISK_URL: ${{ secrets.IRIX53_DISK_URL }}
+      IRIX65_DISK_URL: ${{ secrets.IRIX65_DISK_URL }}
+      IRIS_TAG: ${{ vars.IRIS_TAG }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Skip disabled OS leg
+        id: gate
+        run: |
+          on=true
+          [ "${{ matrix.release }}" = "5.3" ] && [ "${{ vars.BUILD_53 }}" = "false" ] && on=false
+          [ "${{ matrix.release }}" = "6.5" ] && [ "${{ vars.BUILD_65 }}" = "false" ] && on=false
+          echo "on=$on" >> "$GITHUB_OUTPUT"
+          [ "$on" = true ] || echo "::notice::${{ matrix.release }} leg disabled by BUILD_* variable"
+
+      - name: Runner deps
+        if: steps.gate.outputs.on == 'true'
+        run: sudo apt-get update && sudo apt-get install -y unzip curl
+
+      - name: Fetch prebuilt iris + iris-ci
+        if: steps.gate.outputs.on == 'true'
+        env:
+          IRIS_VARIANT: ${{ vars.IRIS_VARIANT || 'r4400' }}
+        run: |
+          mkdir -p iris/target/release
+          pat="IRIS-cli-${IRIS_VARIANT}-linux-x64-*.tar.gz"
+          if [ -n "${IRIS_TAG:-}" ] && [ "${IRIS_TAG}" != latest ]; then
+            gh release download "$IRIS_TAG" --repo danifunker/iris --pattern "$pat" --dir iris --clobber
+          else
+            gh release download --repo danifunker/iris --pattern "$pat" --dir iris --clobber
+          fi
+          tar xzf iris/IRIS-cli-*-linux-x64-*.tar.gz -C iris
+          for b in iris iris-ci; do
+            f=$(find iris -name "$b" -type f | head -1)
+            [ -n "$f" ] && cp "$f" "iris/target/release/$b"
+          done
+          chmod +x iris/target/release/iris iris/target/release/iris-ci
+          iris/target/release/iris --version || true
+
+      - name: Fetch rb-cli (rusty-backup)
+        if: steps.gate.outputs.on == 'true'
+        run: |
+          mkdir -p .rb-cli-bin
+          gh release download --repo danifunker/rusty-backup \
+            --pattern 'rb-cli-linux-x64-*.tar.gz' --dir .rb-cli-bin --clobber
+          tar -C .rb-cli-bin -xzf .rb-cli-bin/rb-cli-linux-x64-*.tar.gz
+          chmod +x .rb-cli-bin/rb-cli
+          echo "$PWD/.rb-cli-bin" >> "$GITHUB_PATH"
+          .rb-cli-bin/rb-cli --version || true
+
+      - name: Fetch ${{ matrix.release }} boot disk
+        if: steps.gate.outputs.on == 'true'
+        id: img
+        run: |
+          echo "path=$(shared/scripts/fetch-image.sh --release ${{ matrix.release }} --dest guest-${{ matrix.release }}.chd)" >> "$GITHUB_OUTPUT"
+
+      - name: Build + boot-test (${{ matrix.release }})
+        if: steps.gate.outputs.on == 'true'
+        run: |
+          shared/scripts/iris-build.sh --release ${{ matrix.release }} \
+            --boot-test --fresh \
+            --image "${{ steps.img.outputs.path }}" \
+            --iris-dir "$PWD/iris" \
+            --outdir "$PWD/out"
+          echo "=== built object ==="; ls -l out/
+
+      - name: Upload driver object
+        if: steps.gate.outputs.on == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: dp-irix${{ matrix.release }}-o
+          path: out/*.o
+          if-no-files-found: error
