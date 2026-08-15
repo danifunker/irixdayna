@@ -22,12 +22,18 @@ cp /mnt/out/dp-ip*.o      "$GD/boot/" 2>/dev/null
 # Order of the dest-path first characters: boot < dp < master.d < system, and
 # the boot glob expands in sorted order, so this is correctly ordered.
 # Sources are relative to -sbase ($GD).
+# A default dp.o (a copy of the IP22 object, which every release carries) is
+# installed too, so the kernel is always linkable even if someone reboots
+# before running dpinstall - a premature reconfigure then links a possibly
+# wrong-board object (benign: "no dp0"), not a missing-file autoconfig failure.
+# dpinstall overwrites dp.o with the hinv-correct board.
 {
     for o in "$GD"/boot/dp-ip*.o; do
         [ -f "$o" ] || continue
         bn=`basename "$o"`
         echo "f 0644 root sys var/sysgen/boot/$bn boot/$bn dp.sw.driver"
     done
+    echo "f 0644 root sys var/sysgen/boot/dp.o boot/dp-ip22.o dp.sw.driver"
     echo "f 0755 root sys var/sysgen/dp/dpinstall dpinstall dp.sw.driver"
     echo "f 0644 root sys var/sysgen/master.d/dp master.d-dp dp.sw.driver"
     echo "f 0644 root sys var/sysgen/system/dp.sm dp.sm dp.sw.driver"
