@@ -1,0 +1,44 @@
+#!/bin/sh
+# dpinstall - run by inst as an exitop after the dp package is installed, and
+# safe to re-run by hand. Picks the board object matching THIS machine, makes
+# it the live /var/sysgen/boot/dp.o, and relinks the kernel. Does NOT reboot -
+# it prints the instruction, because a package must not reboot the machine out
+# from under you.
+#
+# The package ships one object per board (dp-ip20.o, dp-ip22.o, ...). This
+# copies the right one over dp.o. master.d/dp and system/dp.sm are installed by
+# inst as ordinary files, so all this has to do is the board pick + autoconfig.
+set -e
+BOOT=/var/sysgen/boot
+
+board=`hinv 2>/dev/null | head -1 | sed -n 's/.*\(IP[0-9][0-9]*\).*/\1/p'`
+if [ -z "$board" ]; then
+    echo "dpinstall: could not read the board type from hinv." >&2
+    echo "           Pick manually: cp $BOOT/dp-ipNN.o $BOOT/dp.o ; /etc/autoconfig -f" >&2
+    exit 1
+fi
+
+obj="$BOOT/dp-`echo $board | tr ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz`.o"
+if [ ! -f "$obj" ]; then
+    echo "dpinstall: this package has no object for your board ($board)." >&2
+    echo "           Objects present:" >&2
+    ls "$BOOT"/dp-ip*.o 2>/dev/null >&2
+    echo "           Build from source for $board: see the dp driver README." >&2
+    exit 1
+fi
+
+echo "dpinstall: board $board -> installing `basename $obj` as dp.o"
+cp "$obj" "$BOOT/dp.o"
+
+# master.d/dp and system/dp.sm were placed by inst. Sanity-check the .sm the
+# package shipped is the one this OS's lboot understands (INCLUDE: on 5.3,
+# USE: on 6.5) - both are valid, this only warns if it went missing.
+[ -f /var/sysgen/system/dp.sm ] || \
+    echo "dpinstall: WARNING /var/sysgen/system/dp.sm is missing - dp will not be configured." >&2
+
+echo "dpinstall: relinking the kernel (autoconfig -f)"
+/etc/autoconfig -f
+
+echo ""
+echo "dpinstall: done. The new kernel is staged. Reboot cleanly to load dp0:"
+echo "    /etc/shutdown -y -g0 -i6"
