@@ -121,6 +121,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           V="${{ needs.version.outputs.version }}"
+          rm -f dist/*.log          # diagnostics, not release assets
           echo "=== release artifacts ==="; ls -l dist/
           cat > notes.md <<NOTES
           IRIX 5.3 (o32) and 6.5 (n32/64) driver, every supported board.
