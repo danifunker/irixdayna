@@ -122,16 +122,19 @@ jobs:
         run: |
           V="${{ needs.version.outputs.version }}"
           echo "=== release artifacts ==="; ls -l dist/
+          cat > notes.md <<NOTES
+          IRIX 5.3 (o32) and 6.5 (n32/64) driver, every supported board.
+
+          Each release ships, per IRIX line:
+          - dp-$V-<53|65>.iso - EFS CD; mount and \`inst -f\` it
+          - dp-$V-<53|65>.hda - EFS hard-disk image (e.g. a BlueSCSI HDD); mount and \`inst -f\`
+          - dp-$V-<53|65>.tardist - the inst product (Software Manager) on its own
+          - dp-$V-<53|65>.tar.gz - tardist + README, for scp/NFS
+          - dp-ip*.o - the loose per-board objects
+
+          Install: \`inst -f <mounted medium>\`, then \`/var/sysgen/dp/dpinstall\` (picks your board), then reboot. See RELEASE.md.
+          NOTES
+          sed -i 's/^          //' notes.md
           gh release create "v$V" --repo "${{ github.repository }}" \
-            --title "DaynaPort driver v$V" \
-            --notes "IRIX 5.3 (o32) and 6.5 (n32/64) driver, every supported board.
-
-Each release ships, per IRIX line:
-- **dp-$V-<53|65>.iso** - EFS CD; mount and \`inst -f\` it
-- **dp-$V-<53|65>.hda** - EFS hard-disk image (e.g. a BlueSCSI HDD); mount and \`inst -f\`
-- **dp-$V-<53|65>.tardist** - the inst product (Software Manager) on its own
-- **dp-$V-<53|65>.tar.gz** - tardist + README, for scp/NFS
-- **dp-ip*.o** - the loose per-board objects
-
-Install: \`inst -f <mounted medium>\`, then \`/var/sysgen/dp/dpinstall\` (picks your board), then reboot. See RELEASE.md." \
+            --title "DaynaPort driver v$V" --notes-file notes.md \
             dist/* || gh release upload "v$V" --repo "${{ github.repository }}" dist/* --clobber
