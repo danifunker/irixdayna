@@ -1,8 +1,19 @@
 # Building and installing driver releases
 
-A release ships, for each IRIX line, one kernel object per supported board and
-one **inst tardist** — a Software Manager (`inst` / `swmgr`) installable
-package that carries every board object and picks yours by `hinv` on install.
+A release ships, for each IRIX line, mountable media carrying an **inst
+package** (a Software Manager `inst` / `swmgr` product with every board object
+that picks yours by `hinv`), plus the loose objects:
+
+| Artifact | What it is |
+|---|---|
+| `dp-<ver>-<53\|65>.iso` | EFS CD-ROM — mount, `inst -f` it |
+| `dp-<ver>-<53\|65>.hda` | EFS hard-disk image (e.g. a BlueSCSI HDD) — mount, `inst -f` |
+| `dp-<ver>-<53\|65>.tardist` | the inst product trio on its own (untar, `inst -f`) |
+| `dp-<ver>-<53\|65>.tar.gz` | tardist + README, for scp / NFS |
+| `dp-ip*.o` | the loose per-board objects |
+
+The `.iso` and `.hda` have the product unpacked at the volume root, so
+`inst -f <mountpoint>` works with no unpacking.
 
 | Release | ABI | Boards built | Package |
 |---|---|---|---|

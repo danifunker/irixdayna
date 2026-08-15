@@ -91,7 +91,14 @@ jobs:
             --image "${{ steps.img.outputs.path }}" \
             --iris-dir "$PWD/iris" \
             --outdir "$PWD/out"
-          echo "=== artifacts ==="; ls -l out/
+          echo "=== objects + tardist ==="; ls -l out/
+
+      - name: Wrap into release media (.iso / .hda / .tar.gz)
+        run: |
+          shared/scripts/package-dp.sh --release ${{ matrix.release }} \
+            --version "${{ needs.version.outputs.version }}" \
+            --indir "$PWD/out" --outdir "$PWD/out"
+          echo "=== full media set ==="; ls -l out/
 
       - name: Upload ${{ matrix.release }} artifacts
         uses: actions/upload-artifact@v6
@@ -117,5 +124,14 @@ jobs:
           echo "=== release artifacts ==="; ls -l dist/
           gh release create "v$V" --repo "${{ github.repository }}" \
             --title "DaynaPort driver v$V" \
-            --notes "All-board IRIX 5.3 (o32) and 6.5 (n32/64) driver objects, and inst tardists (Software Manager installable). See irix5.3/ and irix6.5/ READMEs to install." \
+            --notes "IRIX 5.3 (o32) and 6.5 (n32/64) driver, every supported board.
+
+Each release ships, per IRIX line:
+- **dp-$V-<53|65>.iso** - EFS CD; mount and \`inst -f\` it
+- **dp-$V-<53|65>.hda** - EFS hard-disk image (e.g. a BlueSCSI HDD); mount and \`inst -f\`
+- **dp-$V-<53|65>.tardist** - the inst product (Software Manager) on its own
+- **dp-$V-<53|65>.tar.gz** - tardist + README, for scp/NFS
+- **dp-ip*.o** - the loose per-board objects
+
+Install: \`inst -f <mounted medium>\`, then \`/var/sysgen/dp/dpinstall\` (picks your board), then reboot. See RELEASE.md." \
             dist/* || gh release upload "v$V" --repo "${{ github.repository }}" dist/* --clobber
