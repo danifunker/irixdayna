@@ -202,7 +202,7 @@ ser_wait_long() {
 # ---- 1. stage the sources --------------------------------------------------
 echo ">>> staging $RELEASE sources from $SRCDIR"
 rm -rf "$STAGE"; mkdir -p "$STAGE/src" "$STAGE/src/master.d" "$STAGE/out"
-cp "$SRCDIR/if_dp.c" "$SRCDIR/sgi_ether.h" "$SRCDIR/Makefile" "$STAGE/src/"
+cp "$SRCDIR/if_dp.c" "$SRCDIR/dp_proto.c" "$SRCDIR/sgi_ether.h" "$SRCDIR/Makefile" "$STAGE/src/"
 cp "$SRCDIR/master.d/dp" "$STAGE/src/master.d/"
 echo "build output lands here" > "$STAGE/out/README"
 

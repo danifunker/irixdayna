@@ -110,32 +110,27 @@ define `mutex_init`, with a different four-argument shape
 three-argument call expands wrongly. `mutex_lock`/`mutex_unlock`/`mutex_trylock`
 are not defined by 5.3 at all — it uses `mutex_enter`/`mutex_exit`.
 
-### Why the protocol code is duplicated
+### How the protocol code is shared
 
-`if_dp.c` here is a near-copy of `../irix6.5/if_dp.c`. That is deliberate. Only about a
-third of the 6.5 driver is genuinely shareable — the rest is discovery, attach,
-locking and module plumbing that has no counterpart across the two releases.
-A compat layer abstracting ~600 divergent lines to save ~500 shared ones would
-have been more `#ifdef` than code.
+`if_dp.c` here holds only the 5.3-specific half — discovery, attach, locking
+and lboot plumbing, which has no counterpart in the 6.5 driver. The DaynaPort
+protocol itself (`dp_do_rx`, `dp_do_tx`, `dp_runqueue`, the CDB builders and
+all five `etherif` handlers) lives once in `shared/dp_proto.c` and is
+`#include`d near the bottom of both `if_dp.c` files:
 
-The duplication is kept honest mechanically:
-
-```sh
-smake drift      # or: sh drift.sh
+```c
+#include "dp_proto.c"   /* dp_proto.c is a symlink to ../shared/dp_proto.c */
 ```
 
-This extracts the region between the `BEGIN SHARED` / `END SHARED` markers and
-diffs it against the corresponding region of `../irix6.5/if_dp.c`. It is currently
-**501 lines, byte-identical**, and covers `dp_do_rx`, `dp_do_tx`,
-`dp_runqueue`, the CDB builders and all five `etherif` handlers.
+It is not compiled on its own — it relies on the softc, the 6.5↔5.3 shim
+macros and the `DP_*` constants each driver defines above the include. A
+protocol fix therefore lands in both drivers at once; there is no duplicated
+region to keep in sync and no `drift` check to run.
 
-**A protocol fix belongs in both files.** `dp_do_rx` in particular is where
-emulator-specific bugs will show up as BlueSCSI / PiSCSI / SCSI2SD get tested,
-and a fix landing in only one tree is exactly what `drift` exists to catch.
-
-Once this port is confirmed working on hardware, the natural follow-up is to
-hoist that shared region into a common `dp_proto.c` included by both and delete
-`drift.sh`.
+(Earlier revisions duplicated this region between the two files and policed it
+with a `drift.sh` byte-identity check. Once the 5.3 port was confirmed on
+hardware, the region was hoisted into `shared/dp_proto.c` and `drift.sh`
+removed — the follow-up this file used to predict.)
 
 ## Before first boot
 

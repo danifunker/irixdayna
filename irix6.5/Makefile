@@ -86,7 +86,7 @@ $(MODULE): $(OBJS)
 .c.o:
 	$(CC) $(CFLAGS) $(MYCFLAGS) -c $<
 
-if_dp.o: if_dp.c
+if_dp.o: if_dp.c dp_proto.c
 
 load: $(MODULE)
 	@echo "Loading DaynaPort driver..."

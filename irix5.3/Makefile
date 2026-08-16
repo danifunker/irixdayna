@@ -28,7 +28,6 @@
 #   smake CPUBOARD=IP12         # Indigo R3000
 #   smake CPUBOARD=IP19         # Challenge / Onyx
 #   smake install               # install for lboot
-#   smake drift                 # check protocol code still matches 6.5
 #
 
 # Must precede the include - Makefile.kernio tests it at parse time. If your
@@ -72,7 +71,7 @@ all: $(MODULE)
 
 # Single translation unit: the compiler output is the loadable object, so no
 # separate "ld -r" step is needed.
-$(MODULE): $(SRCS) sgi_ether.h
+$(MODULE): $(SRCS) sgi_ether.h dp_proto.c
 	$(CC) $(CFLAGS) $(MYCFLAGS) -c $(SRCS) -o $(MODULE)
 
 # lboot reads every *.sm in /var/sysgen/system, so the driver gets its own
@@ -104,10 +103,6 @@ uninstall:
 	rm -f /var/sysgen/system/dp.sm /var/sysgen/boot/dp.o /var/sysgen/master.d/dp
 	@echo "Removed. Run /etc/autoconfig -f and reboot to drop it from the kernel."
 
-# Verify the duplicated protocol code has not drifted from the 6.5 driver.
-drift:
-	@sh ./drift.sh
-
 clean:
 	rm -f $(MODULE)
 
@@ -117,7 +112,6 @@ help:
 	@echo "Targets:"
 	@echo "  all      Build dp.o (default)"
 	@echo "  install  Install for lboot (needs autoconfig + reboot)"
-	@echo "  drift    Check protocol code still matches the 6.5 driver"
 	@echo "  clean    Remove build artifacts"
 	@echo ""
 	@echo "Variables:"
@@ -138,4 +132,4 @@ help:
 	@echo ""
 	@echo "There is no load/unload target: IRIX 5.3 has no ml(1M)."
 
-.PHONY: all install drift clean help
+.PHONY: all install clean help

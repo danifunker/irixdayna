@@ -98,7 +98,7 @@ irix5.3/
   sgi_ether.h      5.3 reconstruction (INET6 member removed)
   Makefile         o32/-coff, static only
   master.d/dp      flags "cs", no +thread_class
-  drift.sh         shared-region checker
+  dp_proto.c       symlink -> ../shared/dp_proto.c (the shared protocol core)
   README.md        build + install + pre-boot checklist
   RESUME.md        this file
   ci/              5.3 emulator configs
@@ -193,20 +193,19 @@ be undone:
   hint OR'd into the snoopheader, so 0 is the right equivalent — we lose an
   optimisation on multi-packet READs and nothing else.
 
-### 2.4 The shared-region contract
+### 2.4 The shared protocol core
 
-`drift.sh` extracts the region between the `BEGIN SHARED` / `END SHARED`
-markers and diffs it against the corresponding region of `../irix6.5/if_dp.c`. Both
-extractions anchor on the same text (`/* dp_scsi_cmd_locked`), so the 6.5 file
-needs no markers of its own — that is deliberate, to keep the PR from touching
-it.
+The DaynaPort protocol code lives once in `shared/dp_proto.c` and is
+`#include`d by both `if_dp.c` files (each via a `dp_proto.c` symlink in its own
+directory). It is not compiled on its own — it uses the softc, the shim macros
+and the `DP_*` constants each driver defines above the include. So a protocol
+fix lands in both drivers at once; there is nothing to keep in sync.
 
-**A protocol fix belongs in both files.** `dp_do_rx` especially: it is where
-emulator-specific bugs will surface as BlueSCSI / PiSCSI / SCSI2SD get tested.
+**`dp_do_rx` especially** is where emulator-specific bugs surface as BlueSCSI /
+PiSCSI / SCSI2SD get tested — and it is now edited in exactly one place.
 
-If you edit the shared region, run `sh irix5.3/drift.sh` before committing. If
-you *intend* to diverge, do not weaken the checker — move the code out of the
-shared region and document why.
+(This superseded an earlier scheme where the region was duplicated in both
+files and a `drift.sh` byte-identity check policed it; that check is gone.)
 
 ---
 
@@ -479,10 +478,11 @@ emulator.
 1. Report the real numbers — machine, IRIX release, emulator, throughput.
 2. Update §1 of this file and drop the "never been compiled" warning from
    `irix5.3/README.md` and the root `README.md`.
-3. Then consider the follow-up refactor: hoist the 501-line shared region into
-   a common `dp_proto.c` included by both drivers and delete `drift.sh`. This
-   was deliberately deferred — landing an unverified port *and* a refactor of
-   working code in one PR is how PRs stall on "I can't test this."
+3. ~~Then consider the follow-up refactor: hoist the shared region into a
+   common `dp_proto.c` included by both drivers and delete `drift.sh`.~~
+   **Done (2026-08-15)** once the port was confirmed on hardware: the shared
+   region is now `shared/dp_proto.c`, `#include`d by both, and `drift.sh` is
+   gone. See §2.4.
 
 ---
 

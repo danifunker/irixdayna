@@ -110,7 +110,7 @@ ser_wait_long() {
 # ---- 1. stage sources + inst inputs on the work disk ----------------------
 echo ">>> staging $RELEASE sources + inst product inputs"
 rm -rf "$STAGE"; mkdir -p "$STAGE/src/master.d" "$STAGE/out" "$STAGE/inst"
-cp "$SRCDIR/if_dp.c" "$SRCDIR/sgi_ether.h" "$SRCDIR/Makefile" "$STAGE/src/"
+cp "$SRCDIR/if_dp.c" "$SRCDIR/dp_proto.c" "$SRCDIR/sgi_ether.h" "$SRCDIR/Makefile" "$STAGE/src/"
 cp "$SRCDIR/master.d/dp" "$STAGE/src/master.d/"
 # inst product: spec (placeholders filled here), the board-pick exitop helper,
 # the right master.d, and the .sm keyword file. The idb is generated in-guest

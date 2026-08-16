@@ -8,9 +8,11 @@ PiSCSI.
 
 Two drivers share one protocol implementation: **IRIX 6.5** under `irix6.5/`
 (tested on IP30/Octane), and an **IRIX 5.3** port under `irix5.3/`
-(tested on IP20/Indigo R4000). The code between the
-`BEGIN SHARED`/`END SHARED` markers is byte-for-byte identical in both, and
-`irix5.3/drift.sh` enforces that - a protocol fix belongs in both files.
+(tested on IP20/Indigo R4000). The DaynaPort protocol code — the RX/TX path,
+`dp_runqueue`, the CDB builders and the etherif handlers — lives once in
+[`shared/dp_proto.c`](shared/dp_proto.c) and is `#include`d by both drivers,
+so a protocol fix lands in both at once. Each driver keeps only its own
+discovery, SCSI submission and locking.
 
 Repository layout:
 
@@ -51,9 +53,8 @@ driver rather than a build flag. Build instructions: [IRIX 5.3](#irix-53)
 below; design rationale and failure-mode triage in
 [`irix5.3/RESUME.md`](irix5.3/RESUME.md).
 
-The DaynaPort protocol code is shared verbatim between the two — `sh
-irix5.3/drift.sh` verifies the two files still agree, and protocol fixes belong
-in both.
+The DaynaPort protocol code is shared as one file, `shared/dp_proto.c`,
+`#include`d by both drivers, so a protocol fix lands in both automatically.
 
 **Status: working on real hardware.** Confirmed on an Indigo R4000 (IP20)
 running IRIX 5.3 with a DaynaPort-compatible target at SCSI id 3: `dp0`
